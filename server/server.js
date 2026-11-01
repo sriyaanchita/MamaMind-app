@@ -59,17 +59,33 @@ function sendError(res, message, error) {
 }
 
 // Generate a Gemini response.
+
 async function generateAI(contents, systemInstruction) {
+  const isJson =
+    systemInstruction === VOICE_SYSTEM_PROMPT ||
+    systemInstruction === MAMAGO_SYSTEM_PROMPT;
+
+  const start = Date.now();
+
   const response = await ai.models.generateContent({
     model: GEMINI_MODEL,
     contents,
     config: {
       systemInstruction,
+      maxOutputTokens: isJson ? 700 : 180,
+      ...(isJson
+        ? { responseMimeType: "application/json" }
+        : {}),
     },
   });
 
+  console.log(
+    `AI response time: ${Date.now() - start}ms`
+  );
+
   return response.text?.trim() || "";
 }
+
 
 // ------------------------------
 // HEALTH CHECK
