@@ -9,30 +9,23 @@ import {
   Easing,
   Dimensions,
 } from "react-native";
+import {
+  collection,
+  doc,
+  getDocs,
+  setDoc,
+} from "firebase/firestore";
+import { auth, db } from "../services/firebase";
 import { router } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useAudioPlayer } from "expo-audio";
 import MeditationIllustration from "../../assets/undraw_meditation_k4oa.svg";
+import { logActivity } from "../utils/activityLogger";
+
+const { width } = Dimensions.get("window");
 
 const HISTORY_KEY = "mamamind_meditation_history";
-
-const { width, height } = Dimensions.get("window");
-
-/* =====================================================
-   MAMAMIND PALETTE
-   ===================================================== */
-
-const C = {
-  yellow: "#FFDA57",
-  teal: "#19B7B0",
-  deepTeal: "#0E7C86",
-  white: "#FFFFFF",
-  coral: "#FF6B6B",
-  cream: "#FFF9E8",
-  paleTeal: "#E8F8F6",
-  dark: "#164F52",
-  muted: "#648384",
-} as const;
+const TODAY_MEDITATION_KEY = "mamamind_meditation_today";
 
 type MeditationSession = {
   id: string;
@@ -40,1589 +33,1169 @@ type MeditationSession = {
   duration: number;
 };
 
-type FloatType = "circle" | "dot" | "ring" | "heart" | "star" | "bubble";
-
-type FloatingDefinition = {
-  type: FloatType;
-  left: number;
-  top: number;
-  size: number;
-  color: string;
-};
-
-type FloatItem = {
-  x: Animated.Value;
-  y: Animated.Value;
-  scale: Animated.Value;
-  rotate: Animated.Value;
-};
-
-const floatingDefinitions: FloatingDefinition[] = [
-  { type: "bubble", left: 0.05, top: 0.13, size: 42, color: C.yellow },
-  { type: "dot", left: 0.88, top: 0.09, size: 16, color: C.coral },
-  { type: "heart", left: 0.08, top: 0.31, size: 31, color: C.teal },
-  { type: "ring", left: 0.91, top: 0.30, size: 32, color: C.yellow },
-  { type: "star", left: 0.04, top: 0.54, size: 29, color: C.coral },
-  { type: "bubble", left: 0.91, top: 0.53, size: 44, color: C.teal },
-  { type: "dot", left: 0.16, top: 0.72, size: 13, color: C.yellow },
-  { type: "ring", left: 0.82, top: 0.75, size: 24, color: C.coral },
-];
-
-const encouragements = [
-  {
-    title: "You made space for yourself. ♡",
-    text: "Even a few quiet minutes count. Carry this little moment with you.",
-  },
-  {
-    title: "You showed up for yourself. ✨",
-    text: "Taking care of yourself is part of taking care of everyone you love.",
-  },
-  {
-    title: "A little pause can go a long way. 🌸",
-    text: "You don't need to do everything at once. One calm moment is enough.",
-  },
-  {
-    title: "You gave yourself some breathing room. ♡",
-    text: "Keep this feeling of calm with you as you continue your day.",
-  },
-  {
-    title: "You chose yourself for a few minutes. 🌿",
-    text: "That small choice matters more than you think.",
-  },
-];
-
-const durationOptions = [1, 5, 10, 15];
-
-const FloatingShape = ({
-  definition,
-  item,
-}: {
-  definition: FloatingDefinition;
-  item: FloatItem;
-}) => {
-  const renderShape = () => {
-    switch (definition.type) {
-      case "heart":
-        return (
-          <Text
-            style={[
-              styles.floatHeart,
-              { color: definition.color, fontSize: definition.size },
-            ]}
-          >
-            ♡
-          </Text>
-        );
-
-      case "star":
-        return (
-          <Text
-            style={[
-              styles.floatStar,
-              { color: definition.color, fontSize: definition.size },
-            ]}
-          >
-            ✦
-          </Text>
-        );
-
-      case "ring":
-        return (
-          <View
-            style={{
-              width: definition.size,
-              height: definition.size,
-              borderRadius: definition.size / 2,
-              borderWidth: 3,
-              borderColor: definition.color,
-            }}
-          />
-        );
-
-      case "dot":
-        return (
-          <View
-            style={{
-              width: definition.size,
-              height: definition.size,
-              borderRadius: definition.size / 2,
-              backgroundColor: definition.color,
-            }}
-          />
-        );
-
-      case "bubble":
-        return (
-          <View
-            style={{
-              width: definition.size,
-              height: definition.size,
-              borderRadius: definition.size * 0.38,
-              backgroundColor: definition.color,
-              opacity: 0.82,
-            }}
-          />
-        );
-
-      case "circle":
-        return (
-          <View
-            style={{
-              width: definition.size,
-              height: definition.size,
-              borderRadius: definition.size / 2,
-              backgroundColor: definition.color,
-            }}
-          />
-        );
-
-      default:
-        return null;
-    }
-  };
-
-  return (
-    <Animated.View
-      pointerEvents="none"
-      style={[
-        styles.floatingElement,
-        {
-          left: width * definition.left,
-          top: height * definition.top,
-          transform: [
-            { translateX: item.x },
-            { translateY: item.y },
-            { scale: item.scale },
-            {
-              rotate: item.rotate.interpolate({
-                inputRange: [-1, 1],
-                outputRange: ["-6deg", "6deg"],
-              }),
-            },
-          ],
-        },
-      ]}
-    >
-      {renderShape()}
-    </Animated.View>
-  );
-};
+const meditationOptions = [1, 5, 10, 15];
 
 export default function Meditation() {
   const [selectedDuration, setSelectedDuration] = useState(5);
-  const [timeLeft, setTimeLeft] = useState(5 * 60);
-
-  const [started, setStarted] = useState(false);
+  const [isMeditating, setIsMeditating] = useState(false);
   const [completed, setCompleted] = useState(false);
-
+  const [timeLeft, setTimeLeft] = useState(5 * 60);
   const [history, setHistory] = useState<MeditationSession[]>([]);
+  const [encouragement, setEncouragement] = useState("");
 
-  const [completionMessage, setCompletionMessage] = useState(
-    encouragements[0]
-  );
+  const breathingAnim = useRef(new Animated.Value(1)).current;
+  const floatingAnim = useRef(new Animated.Value(0)).current;
 
-  const breathingAnimation = useRef(new Animated.Value(0)).current;
-
-  const floatingItems = useRef<FloatItem[]>(
-    floatingDefinitions.map(() => ({
-      x: new Animated.Value(0),
-      y: new Animated.Value(0),
-      scale: new Animated.Value(1),
-      rotate: new Animated.Value(0),
-    }))
-  ).current;
-
-  const floatingAnimations = useRef<Animated.CompositeAnimation[]>([]).current;
-
-  // Completion sound
-  const beepPlayer = useAudioPlayer(
+  const player = useAudioPlayer(
     require("../../assets/images/meditate.mp3")
   );
 
-  /* =====================================================
+  /* --------------------------------------------------
      LOAD MEDITATION HISTORY
-     ===================================================== */
+  -------------------------------------------------- */
 
   useEffect(() => {
     loadHistory();
   }, []);
-
   const loadHistory = async () => {
-    try {
-      const savedHistory = await AsyncStorage.getItem(HISTORY_KEY);
+  try {
+    const savedHistory = await AsyncStorage.getItem(HISTORY_KEY);
 
-      if (savedHistory) {
-        setHistory(JSON.parse(savedHistory));
-      }
-    } catch (error) {
-      console.log("Could not load meditation history:", error);
+    const localHistory: MeditationSession[] = savedHistory
+      ? JSON.parse(savedHistory)
+      : [];
+
+    const user = auth.currentUser;
+
+    // If signed out, retain the existing local-only behavior.
+    if (!user) {
+      setHistory(localHistory);
+      return;
     }
-  };
 
-  /* =====================================================
-     SAVE COMPLETED SESSION
-     ===================================================== */
+    const historyRef = collection(
+      db,
+      "users",
+      user.uid,
+      "meditationHistory"
+    );
 
-  const saveSession = async (duration: number) => {
-    try {
-      const newSession: MeditationSession = {
-        id: Date.now().toString(),
-        date: new Date().toISOString(),
-        duration,
-      };
+    // Migrate existing local sessions to the cloud.
+    await Promise.all(
+      localHistory.map((session) =>
+        setDoc(doc(historyRef, session.id), session, {
+          merge: true,
+        })
+      )
+    );
 
-      const updatedHistory = [newSession, ...history];
+    // Load sessions from Firestore.
+    const snapshot = await getDocs(historyRef);
 
-      setHistory(updatedHistory);
+    const cloudHistory: MeditationSession[] = snapshot.docs.map(
+      (item) => item.data() as MeditationSession
+    );
 
-      await AsyncStorage.setItem(
-        HISTORY_KEY,
-        JSON.stringify(updatedHistory)
-      );
-    } catch (error) {
-      console.log("Could not save meditation session:", error);
-    }
-  };
+    // Merge by ID to avoid duplicates.
+    const merged = new Map<string, MeditationSession>();
 
-  /* =====================================================
-     FLOATING BACKGROUND ANIMATION
-     ===================================================== */
-
-  useEffect(() => {
-    let cancelled = false;
-    const timers: ReturnType<typeof setTimeout>[] = [];
-
-    floatingItems.forEach((item, index) => {
-      const move = () => {
-        if (cancelled) return;
-
-        const xDistance = (Math.random() - 0.5) * 75;
-        const yDistance = (Math.random() - 0.5) * 70;
-        const duration = 6500 + Math.random() * 2600;
-        const rotateTarget = Math.random() > 0.5 ? 1 : -1;
-
-        const animation = Animated.parallel([
-          Animated.timing(item.x, {
-            toValue: xDistance,
-            duration,
-            easing: Easing.inOut(Easing.sin),
-            useNativeDriver: true,
-          }),
-
-          Animated.timing(item.y, {
-            toValue: yDistance,
-            duration,
-            easing: Easing.inOut(Easing.sin),
-            useNativeDriver: true,
-          }),
-
-          Animated.sequence([
-            Animated.timing(item.scale, {
-              toValue: 1.045,
-              duration: duration / 2,
-              easing: Easing.inOut(Easing.sin),
-              useNativeDriver: true,
-            }),
-
-            Animated.timing(item.scale, {
-              toValue: 1,
-              duration: duration / 2,
-              easing: Easing.inOut(Easing.sin),
-              useNativeDriver: true,
-            }),
-          ]),
-
-          Animated.sequence([
-            Animated.timing(item.rotate, {
-              toValue: rotateTarget,
-              duration: duration / 2,
-              easing: Easing.inOut(Easing.sin),
-              useNativeDriver: true,
-            }),
-
-            Animated.timing(item.rotate, {
-              toValue: 0,
-              duration: duration / 2,
-              easing: Easing.inOut(Easing.sin),
-              useNativeDriver: true,
-            }),
-          ]),
-        ]);
-
-        floatingAnimations[index] = animation;
-
-        animation.start(({ finished }) => {
-          if (finished && !cancelled) {
-            move();
-          }
-        });
-      };
-
-      timers.push(
-        setTimeout(() => {
-          move();
-        }, index * 220)
-      );
+    localHistory.forEach((session) => {
+      merged.set(session.id, session);
     });
 
-    return () => {
-      cancelled = true;
+    cloudHistory.forEach((session) => {
+      merged.set(session.id, session);
+    });
 
-      timers.forEach((timer) => clearTimeout(timer));
+    const updatedHistory = Array.from(merged.values()).sort(
+      (a, b) =>
+        new Date(b.date).getTime() -
+        new Date(a.date).getTime()
+    );
 
-      floatingAnimations.forEach((animation) => animation?.stop());
-    };
+    await AsyncStorage.setItem(
+      HISTORY_KEY,
+      JSON.stringify(updatedHistory)
+    );
+
+    setHistory(updatedHistory);
+  } catch (error) {
+    console.log("Error loading meditation history:", error);
+
+    // Keep the screen usable if cloud sync fails.
+    try {
+      const savedHistory = await AsyncStorage.getItem(HISTORY_KEY);
+      setHistory(savedHistory ? JSON.parse(savedHistory) : []);
+    } catch {
+      setHistory([]);
+    }
+  }
+};
+
+  /* --------------------------------------------------
+     FLOATING BACKGROUND ANIMATION
+  -------------------------------------------------- */
+
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(floatingAnim, {
+          toValue: 1,
+          duration: 3500,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(floatingAnim, {
+          toValue: 0,
+          duration: 3500,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ])
+    ).start();
   }, []);
 
-  /* =====================================================
-     START BREATHING ANIMATION
-     ===================================================== */
+  /* --------------------------------------------------
+     BREATHING ANIMATION
+  -------------------------------------------------- */
 
-  const startBreathingAnimation = () => {
-    breathingAnimation.setValue(0);
+  useEffect(() => {
+    if (!isMeditating) {
+      breathingAnim.stopAnimation();
+      breathingAnim.setValue(1);
+      return;
+    }
 
     Animated.loop(
       Animated.sequence([
-        Animated.timing(breathingAnimation, {
-          toValue: 1,
+        Animated.timing(breathingAnim, {
+          toValue: 1.25,
           duration: 4000,
           easing: Easing.inOut(Easing.ease),
           useNativeDriver: true,
         }),
-
-        Animated.timing(breathingAnimation, {
-          toValue: 0,
+        Animated.timing(breathingAnim, {
+          toValue: 1,
           duration: 4000,
           easing: Easing.inOut(Easing.ease),
           useNativeDriver: true,
         }),
       ])
     ).start();
-  };
+  }, [isMeditating]);
 
-  /* =====================================================
-     START MEDITATION
-     ===================================================== */
-
-  const startMeditation = () => {
-    const seconds = selectedDuration * 60;
-
-    setTimeLeft(seconds);
-    setCompleted(false);
-    setStarted(true);
-
-    startBreathingAnimation();
-  };
-
-  /* =====================================================
-     FINISH MEDITATION
-     ===================================================== */
-
-  const finishMeditation = async () => {
-    breathingAnimation.stopAnimation();
-
-    setStarted(false);
-    setCompleted(true);
-
-    // Play completion sound
-    try {
-      beepPlayer.seekTo(0);
-      beepPlayer.play();
-    } catch (error) {
-      console.log("Could not play completion sound:", error);
-    }
-
-    // Pick an encouragement
-    const randomIndex = Math.floor(
-      Math.random() * encouragements.length
-    );
-
-    setCompletionMessage(encouragements[randomIndex]);
-
-    // Save session
-    await saveSession(selectedDuration);
-  };
-
-  /* =====================================================
+  /* --------------------------------------------------
      TIMER
-     ===================================================== */
+  -------------------------------------------------- */
 
   useEffect(() => {
-    if (!started) return;
+    if (!isMeditating) return;
+
+    if (timeLeft <= 0) {
+      finishMeditation();
+      return;
+    }
 
     const timer = setInterval(() => {
-      setTimeLeft((previousTime) => {
-        if (previousTime <= 1) {
-          clearInterval(timer);
-
-          setTimeout(() => {
-            finishMeditation();
-          }, 100);
-
-          return 0;
-        }
-
-        return previousTime - 1;
-      });
+      setTimeLeft((previous) => previous - 1);
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [started]);
+  }, [isMeditating, timeLeft]);
 
-  /* =====================================================
-     CLEANUP
-     ===================================================== */
-
-  useEffect(() => {
-    return () => {
-      breathingAnimation.stopAnimation();
-    };
-  }, []);
-
-  /* =====================================================
+  /* --------------------------------------------------
      FORMAT TIME
-     ===================================================== */
+  -------------------------------------------------- */
 
   const formatTime = (seconds: number) => {
     const minutes = Math.floor(seconds / 60);
     const remainingSeconds = seconds % 60;
 
-    return `${String(minutes).padStart(2, "0")}:${String(
-      remainingSeconds
-    ).padStart(2, "0")}`;
+    return `${minutes}:${remainingSeconds
+      .toString()
+      .padStart(2, "0")}`;
   };
 
-  /* =====================================================
+  /* --------------------------------------------------
+     SAVE MEDITATION HISTORY
+  -------------------------------------------------- */
+
+  const saveSession = async (duration: number) => {
+  const newSession: MeditationSession = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    date: new Date().toISOString(),
+    duration,
+  };
+
+  try {
+    const savedHistory = await AsyncStorage.getItem(HISTORY_KEY);
+
+    const existingHistory: MeditationSession[] = savedHistory
+      ? JSON.parse(savedHistory)
+      : [];
+
+    const updatedHistory = [newSession, ...existingHistory];
+
+    await AsyncStorage.setItem(
+      HISTORY_KEY,
+      JSON.stringify(updatedHistory)
+    );
+
+    setHistory(updatedHistory);
+  } catch (error) {
+    console.log("Error saving meditation locally:", error);
+  }
+
+  try {
+    const user = auth.currentUser;
+
+    if (!user) {
+      console.log(
+        "Meditation saved locally. Sign in to sync it to the cloud."
+      );
+      return;
+    }
+
+    await setDoc(
+      doc(
+        db,
+        "users",
+        user.uid,
+        "meditationHistory",
+        newSession.id
+      ),
+      newSession
+    );
+
+    console.log("Meditation history synced to Firestore:", newSession);
+  } catch (error) {
+    console.log("Error syncing meditation history:", error);
+  }
+};
+
+  /* --------------------------------------------------
+     START MEDITATION
+  -------------------------------------------------- */
+
+  const startMeditation = () => {
+    setCompleted(false);
+    setTimeLeft(selectedDuration * 60);
+    setIsMeditating(true);
+  };
+
+  /* --------------------------------------------------
+     FINISH MEDITATION
+  -------------------------------------------------- */
+
+  const finishMeditation = async () => {
+    setIsMeditating(false);
+    setCompleted(true);
+
+    const messages = [
+      "You made space for yourself today.",
+      "A calm moment can make a big difference.",
+      "You took care of yourself. That matters.",
+      "You deserve moments like this.",
+    ];
+
+    const randomMessage =
+      messages[Math.floor(Math.random() * messages.length)];
+
+    setEncouragement(randomMessage);
+
+    /* Play completion sound */
+    try {
+      player.seekTo(0);
+      player.play();
+    } catch (error) {
+      console.log("Audio error:", error);
+    }
+
+    /* Save meditation history */
+    await saveSession(selectedDuration);
+    const activity = await logActivity("meditation", {
+  duration: selectedDuration,
+});
+
+console.log("Saved Activity:", activity);
+
+    /* --------------------------------------------------
+       NEW:
+       SAVE THAT MEDITATION WAS COMPLETED TODAY
+    -------------------------------------------------- */
+
+    try {
+      await AsyncStorage.setItem(
+        TODAY_MEDITATION_KEY,
+        JSON.stringify({
+          completed: true,
+          date: new Date().toISOString().slice(0, 10),
+        })
+      );
+    } catch (error) {
+      console.log(
+        "Error saving today's meditation status:",
+        error
+      );
+    }
+  };
+  
+
+  /* --------------------------------------------------
+     RESET
+  -------------------------------------------------- */
+
+  const resetMeditation = () => {
+    setCompleted(false);
+    setIsMeditating(false);
+    setTimeLeft(selectedDuration * 60);
+  };
+
+  /* --------------------------------------------------
      SELECT DURATION
-     ===================================================== */
+  -------------------------------------------------- */
 
-  const selectDuration = (minutes: number) => {
-    if (started) return;
+  const selectDuration = (duration: number) => {
+    if (isMeditating) return;
 
-    setSelectedDuration(minutes);
-    setTimeLeft(minutes * 60);
+    setSelectedDuration(duration);
+    setTimeLeft(duration * 60);
+    setCompleted(false);
   };
 
-  /* =====================================================
-     HISTORY DATA
-     ===================================================== */
+  /* --------------------------------------------------
+     TODAY'S STATS
+  -------------------------------------------------- */
 
-  const totalSessions = history.length;
+  const today = new Date().toISOString().slice(0, 10);
 
-  const totalMinutes = history.reduce(
+  const todaySessions = history.filter(
+    (session) => session.date.slice(0, 10) === today
+  );
+
+  const todayMinutes = todaySessions.reduce(
     (total, session) => total + session.duration,
     0
   );
 
-  /* =====================================================
-     ANIMATION
-     ===================================================== */
+  /* --------------------------------------------------
+     FLOATING ANIMATION
+  -------------------------------------------------- */
 
-  // Main breathing scale is intentionally unchanged: 0.85 -> 1.15 -> 0.85
-  const breathingScale = breathingAnimation.interpolate({
+  const floatingTranslate = floatingAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: [0.85, 1.15],
+    outputRange: [0, -8],
   });
-
-  const breathingOpacity = breathingAnimation.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0.75, 1],
-  });
-
-  // Extra decorative motion uses the same breathing progress
-  // without changing the main scale.
-  const breathingRotation = breathingAnimation.interpolate({
-    inputRange: [0, 1],
-    outputRange: ["-3deg", "3deg"],
-  });
-
-  const accentOneY = breathingAnimation.interpolate({
-    inputRange: [0, 1],
-    outputRange: [8, -10],
-  });
-
-  const accentTwoY = breathingAnimation.interpolate({
-    inputRange: [0, 1],
-    outputRange: [-8, 10],
-  });
-
-  const accentThreeX = breathingAnimation.interpolate({
-    inputRange: [0, 1],
-    outputRange: [-7, 8],
-  });
-
-  const accentOpacity = breathingAnimation.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0.45, 0.95],
-  });
-
-  /* =====================================================
-     UI
-     ===================================================== */
 
   return (
-    <View style={styles.screen}>
-      {/* FLOATING BACKGROUND */}
+    <View style={styles.container}>
+      {/* --------------------------------------------------
+          BACKGROUND FLOATING CIRCLE
+      -------------------------------------------------- */}
 
-      <View pointerEvents="none" style={styles.floatingLayer}>
-        {floatingDefinitions.map((definition, index) => (
-          <FloatingShape
-            key={index}
-            definition={definition}
-            item={floatingItems[index]}
-          />
-        ))}
-      </View>
+      <Animated.View
+        style={[
+          styles.backgroundCircle,
+          {
+            transform: [
+              {
+                translateY: floatingTranslate,
+              },
+            ],
+          },
+        ]}
+      />
 
       <ScrollView
-        style={styles.container}
-        contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scrollContent}
       >
-        {/* BACK */}
+        {/* --------------------------------------------------
+            HEADER
+        -------------------------------------------------- */}
 
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => router.back()}
-        >
-          <Text style={styles.backText}>← Back</Text>
-        </TouchableOpacity>
+        <View style={styles.header}>
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => router.back()}
+          >
+            <Text style={styles.backText}>‹</Text>
+          </TouchableOpacity>
 
-        {/* HEADER */}
+          <View>
+            <Text style={styles.smallTitle}>MAMAMIND</Text>
+            <Text style={styles.headerTitle}>Meditation</Text>
+          </View>
+        </View>
 
-        <Text style={styles.label}>A LITTLE PAUSE</Text>
+        {/* --------------------------------------------------
+            INTRO CARD
+        -------------------------------------------------- */}
 
-        <Text style={styles.title}>
-          Breathe.{"\n"}
-          You are here.
-        </Text>
+        <View style={styles.introCard}>
+          <View style={styles.introTextContainer}>
+            <Text style={styles.introSmall}>
+              A MOMENT FOR YOU
+            </Text>
 
-        <Text style={styles.subtitle}>
-          You don't need to fix everything right now.
-          Just give yourself a few quiet minutes.
-        </Text>
+            <Text style={styles.introTitle}>
+              Breathe.{"\n"}
+              Relax.{"\n"}
+              Reset.
+            </Text>
 
-        {/* UNIQUE MEDITATION VISUAL */}
+            <Text style={styles.introDescription}>
+              You don't need a lot of time. Even a few
+              quiet minutes can help you feel a little
+              lighter.
+            </Text>
+          </View>
 
-        <View style={styles.visual}>
           <MeditationIllustration
-            width="100%"
-            height="100%"
+            width={145}
+            height={145}
           />
         </View>
 
-        {/* DURATION SELECTOR */}
+        {/* --------------------------------------------------
+            DURATION
+        -------------------------------------------------- */}
 
-        {!started && !completed && (
-          <View style={styles.durationCard}>
-            <Text style={styles.durationLabel}>CHOOSE YOUR TIME</Text>
+        <Text style={styles.sectionTitle}>
+          CHOOSE YOUR MOMENT
+        </Text>
 
-            <Text style={styles.durationTitle}>
-              How long would you like to pause?
-            </Text>
+        <View style={styles.durationRow}>
+          {meditationOptions.map((duration) => {
+            const selected = selectedDuration === duration;
 
-            <View style={styles.durationRow}>
-              {durationOptions.map((minutes) => (
-                <TouchableOpacity
-                  key={minutes}
+            return (
+              <TouchableOpacity
+                key={duration}
+                style={[
+                  styles.durationButton,
+                  selected && styles.durationButtonSelected,
+                ]}
+                onPress={() => selectDuration(duration)}
+                activeOpacity={0.8}
+              >
+                <Text
                   style={[
-                    styles.durationButton,
-                    selectedDuration === minutes &&
-                      styles.durationButtonActive,
+                    styles.durationNumber,
+                    selected && styles.durationNumberSelected,
                   ]}
-                  onPress={() => selectDuration(minutes)}
                 >
-                  <Text
-                    style={[
-                      styles.durationNumber,
-                      selectedDuration === minutes &&
-                        styles.durationNumberActive,
-                    ]}
-                  >
-                    {minutes}
-                  </Text>
+                  {duration}
+                </Text>
 
-                  <Text
-                    style={[
-                      styles.durationUnit,
-                      selectedDuration === minutes &&
-                        styles.durationUnitActive,
-                    ]}
-                  >
-                    min
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-        )}
+                <Text
+                  style={[
+                    styles.durationText,
+                    selected && styles.durationTextSelected,
+                  ]}
+                >
+                  min
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
 
-        {/* READY CARD */}
+        {/* --------------------------------------------------
+            MEDITATION AREA
+        -------------------------------------------------- */}
 
-        {!started && !completed && (
-          <View style={styles.card}>
-            <Text style={styles.cardLabel}>YOUR SESSION</Text>
-
-            <Text style={styles.cardTitle}>Gentle breathing</Text>
-
-            <Text style={styles.cardText}>
-              Sit somewhere comfortable. Relax your shoulders
-              and follow your breath without trying to change it.
-            </Text>
-
-            <View style={styles.selectedTimeBox}>
-              <Text style={styles.selectedTime}>{selectedDuration}</Text>
-
-              <Text style={styles.selectedTimeUnit}>minutes</Text>
-            </View>
-
-            <TouchableOpacity
-              style={styles.primaryButton}
-              onPress={startMeditation}
-            >
-              <Text style={styles.primaryText}>Begin Meditation</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {/* ACTIVE MEDITATION */}
-
-        {started && (
-          <View style={styles.activeCard}>
-            <Text style={styles.cardLabel}>RIGHT NOW</Text>
-
-            <Text style={styles.breatheText}>Breathe slowly</Text>
-
-            {/* Animated breathing circle */}
-
-            <View style={styles.breathingStage}>
+        <View style={styles.meditationCard}>
+          {!isMeditating && !completed && (
+            <>
               <Animated.View
                 style={[
-                  styles.breathAccentOne,
+                  styles.breathCircle,
                   {
-                    opacity: accentOpacity,
                     transform: [
-                      { translateY: accentOneY },
-                      { rotate: breathingRotation },
+                      {
+                        scale: breathingAnim,
+                      },
                     ],
-                  },
-                ]}
-              />
-
-              <Animated.View
-                style={[
-                  styles.breathAccentTwo,
-                  {
-                    opacity: accentOpacity,
-                    transform: [
-                      { translateY: accentTwoY },
-                      { rotate: breathingRotation },
-                    ],
-                  },
-                ]}
-              />
-
-              <Animated.View
-                style={[
-                  styles.breathAccentThree,
-                  {
-                    opacity: accentOpacity,
-                    transform: [{ translateX: accentThreeX }],
-                  },
-                ]}
-              />
-
-              <Animated.View
-                style={[
-                  styles.breathCircleOuter,
-                  {
-                    transform: [{ scale: breathingScale }],
-                    opacity: breathingOpacity,
                   },
                 ]}
               >
-                <View style={styles.breathCircleInner}>
+                <View style={styles.innerCircle}>
+                  <Text style={styles.breathText}>
+                    {selectedDuration}
+                  </Text>
+
+                  <Text style={styles.breathLabel}>
+                    MINUTES
+                  </Text>
+                </View>
+              </Animated.View>
+
+              <Text style={styles.meditationTitle}>
+                Ready when you are
+              </Text>
+
+              <Text style={styles.meditationDescription}>
+                Find a comfortable place, put your phone
+                down and give yourself this little moment.
+              </Text>
+
+              <TouchableOpacity
+                style={styles.startButton}
+                onPress={startMeditation}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.startButtonText}>
+                  BEGIN MEDITATION
+                </Text>
+              </TouchableOpacity>
+            </>
+          )}
+
+          {/* --------------------------------------------------
+              ACTIVE MEDITATION
+          -------------------------------------------------- */}
+
+          {isMeditating && (
+            <>
+              <Animated.View
+                style={[
+                  styles.breathCircle,
+                  styles.activeBreathCircle,
+                  {
+                    transform: [
+                      {
+                        scale: breathingAnim,
+                      },
+                    ],
+                  },
+                ]}
+              >
+                <View style={styles.innerCircle}>
                   <Text style={styles.timerText}>
                     {formatTime(timeLeft)}
                   </Text>
 
-                  <Text style={styles.timerLabel}>remaining</Text>
+                  <Text style={styles.breathLabel}>
+                    BREATHE
+                  </Text>
                 </View>
               </Animated.View>
-            </View>
 
-            <Text style={styles.breathInstruction}>
-              Breathe in as the circle grows.
-              Breathe out as it gently returns.
-            </Text>
-
-            <TouchableOpacity
-              style={styles.finishButton}
-              onPress={finishMeditation}
-            >
-              <Text style={styles.finishButtonText}>Finish Early</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {/* COMPLETION */}
-
-        {completed && (
-          <View style={styles.completedCard}>
-            <View style={styles.completedCircle}>
-              <Text style={styles.completedHeart}>✓</Text>
-            </View>
-
-            <Text style={styles.completedLabel}>
-              MEDITATION COMPLETE
-            </Text>
-
-            <Text style={styles.completedTitle}>
-              {completionMessage.title}
-            </Text>
-
-            <Text style={styles.completedText}>
-              {completionMessage.text}
-            </Text>
-
-            <View style={styles.completedTimeBox}>
-              <Text style={styles.completedTime}>
-                {selectedDuration}
+              <Text style={styles.meditationTitle}>
+                Stay with your breath
               </Text>
 
-              <Text style={styles.completedTimeLabel}>
-                peaceful minutes
+              <Text style={styles.meditationDescription}>
+                Slowly breathe in... and breathe out.
+                There's nowhere else you need to be right now.
               </Text>
-            </View>
 
-            <TouchableOpacity
-              style={styles.primaryButton}
-              onPress={() => router.back()}
-            >
-              <Text style={styles.primaryText}>Back to My Space</Text>
-            </TouchableOpacity>
-          </View>
-        )}
+              <TouchableOpacity
+                style={styles.stopButton}
+                onPress={finishMeditation}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.stopButtonText}>
+                  FINISH
+                </Text>
+              </TouchableOpacity>
+            </>
+          )}
 
-        {/* OTHER OPTIONS */}
+          {/* --------------------------------------------------
+              COMPLETED
+          -------------------------------------------------- */}
 
-        {!started && !completed && (
-          <View style={styles.options}>
-            <Text style={styles.optionsTitle}>
-              When you need a little more
+          {completed && (
+            <>
+              <View style={styles.completedCircle}>
+                <Text style={styles.completedMark}>✓</Text>
+              </View>
+
+              <Text style={styles.completedTitle}>
+                You did it.
+              </Text>
+
+              <Text style={styles.encouragement}>
+                {encouragement}
+              </Text>
+
+              <View style={styles.completedInfo}>
+                <Text style={styles.completedInfoSmall}>
+                  MEDITATION COMPLETED
+                </Text>
+
+                <Text style={styles.completedInfoMain}>
+                  {selectedDuration} minutes
+                </Text>
+              </View>
+
+              <TouchableOpacity
+                style={styles.startButton}
+                onPress={resetMeditation}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.startButtonText}>
+                  MEDITATE AGAIN
+                </Text>
+              </TouchableOpacity>
+            </>
+          )}
+        </View>
+
+        {/* --------------------------------------------------
+            TODAY'S PROGRESS
+        -------------------------------------------------- */}
+
+        <Text style={styles.sectionTitle}>
+          YOUR CALM MOMENTS
+        </Text>
+
+        <View style={styles.statsCard}>
+          <View style={styles.statItem}>
+            <Text style={styles.statNumber}>
+              {todayMinutes}
             </Text>
 
-            <View style={styles.optionRow}>
-              <View style={styles.option}>
-                <Text style={styles.optionNumber}>01</Text>
-
-                <Text style={styles.optionTitle}>
-                  Slow breathing
-                </Text>
-
-                <Text style={styles.optionText}>
-                  Find your rhythm.
-                </Text>
-              </View>
-
-              <View style={styles.option}>
-                <Text style={styles.optionNumber}>02</Text>
-
-                <Text style={styles.optionTitle}>Body pause</Text>
-
-                <Text style={styles.optionText}>
-                  Release some tension.
-                </Text>
-              </View>
-            </View>
+            <Text style={styles.statLabel}>
+              MINUTES TODAY
+            </Text>
           </View>
-        )}
 
-        {/* MEDITATION HISTORY */}
+          <View style={styles.statDivider} />
 
-        {!started && (
-          <View style={styles.historySection}>
-            <Text style={styles.optionsTitle}>
-              Your Meditation Journey
+          <View style={styles.statItem}>
+            <Text style={styles.statNumber}>
+              {todaySessions.length}
             </Text>
 
-            {/* Stats */}
+            <Text style={styles.statLabel}>
+              SESSIONS
+            </Text>
+          </View>
+        </View>
 
-            <View style={styles.statsRow}>
-              <View style={styles.statCard}>
-                <Text style={styles.statNumber}>
-                  {totalSessions}
-                </Text>
+        {/* --------------------------------------------------
+            HISTORY
+        -------------------------------------------------- */}
 
-                <Text style={styles.statLabel}>Sessions</Text>
-              </View>
+        {history.length > 0 && (
+          <>
+            <Text style={styles.sectionTitle}>
+              RECENT MOMENTS
+            </Text>
 
-              <View style={styles.statCard}>
-                <Text style={styles.statNumber}>
-                  {totalMinutes}
-                </Text>
+            <View style={styles.historyCard}>
+              {history.slice(0, 5).map((session) => {
+                const sessionDate = new Date(session.date);
 
-                <Text style={styles.statLabel}>Minutes</Text>
-              </View>
-            </View>
+                return (
+                  <View
+                    key={session.id}
+                    style={styles.historyRow}
+                  >
+                    <View style={styles.historyLeft}>
+                      <View style={styles.historyDot} />
 
-            {/* History */}
-
-            {history.length === 0 ? (
-              <View style={styles.emptyHistory}>
-                <Text style={styles.emptyHistoryIcon}>♡</Text>
-
-                <Text style={styles.emptyHistoryTitle}>
-                  Your journey starts here.
-                </Text>
-
-                <Text style={styles.emptyHistoryText}>
-                  Complete your first meditation and
-                  it will appear here.
-                </Text>
-              </View>
-            ) : (
-              <View style={styles.historyList}>
-                {history.slice(0, 5).map((session) => {
-                  const sessionDate = new Date(session.date);
-
-                  return (
-                    <View
-                      key={session.id}
-                      style={styles.historyItem}
-                    >
-                      <View style={styles.historyIcon}>
-                        <Text style={styles.historyIconText}>
-                          ♡
-                        </Text>
-                      </View>
-
-                      <View style={styles.historyInfo}>
+                      <View>
                         <Text style={styles.historyTitle}>
-                          {session.duration} minute meditation
+                          Meditation
                         </Text>
 
                         <Text style={styles.historyDate}>
-                          {sessionDate.toLocaleDateString("en-IN", {
-                            day: "numeric",
-                            month: "short",
-                          })}
+                          {sessionDate.toLocaleDateString(
+                            "en-IN",
+                            {
+                              day: "numeric",
+                              month: "short",
+                            }
+                          )}
                         </Text>
                       </View>
-
-                      <Text style={styles.historyCheck}>✓</Text>
                     </View>
-                  );
-                })}
-              </View>
-            )}
-          </View>
+
+                    <Text style={styles.historyDuration}>
+                      {session.duration} min
+                    </Text>
+                  </View>
+                );
+              })}
+            </View>
+          </>
         )}
+
+        {/* --------------------------------------------------
+            GENTLE REMINDER
+        -------------------------------------------------- */}
+
+        <View style={styles.reminderCard}>
+          <Text style={styles.reminderLabel}>
+            A LITTLE REMINDER
+          </Text>
+
+          <Text style={styles.reminderText}>
+            Taking care of yourself isn't something
+            extra. It's part of taking care of your family.
+          </Text>
+        </View>
+
+        {/* --------------------------------------------------
+            VOICE COMMAND
+        -------------------------------------------------- */}
+
+        <View style={styles.voiceCard}>
+          <Text style={styles.voiceLabel}>
+            MAMAMIND COMMAND
+          </Text>
+
+          <Text style={styles.voiceCommand}>
+            "Open meditation"
+          </Text>
+
+          <Text style={styles.voiceDescription}>
+            Voice navigation is ready for the development
+            build. For now, use the command options on
+            your dashboard.
+          </Text>
+        </View>
       </ScrollView>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  screen: {
-    flex: 1,
-    backgroundColor: C.cream,
-  },
+/* ==========================================================
+   STYLES
+========================================================== */
 
+const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "transparent",
-    zIndex: 1,
+    backgroundColor: "#FFF9E8",
   },
 
-  content: {
-    padding: 22,
-    paddingBottom: 60,
+  scrollContent: {
+    paddingTop: 55,
+    paddingBottom: 40,
+    paddingHorizontal: 20,
   },
 
-  /* FLOATING */
-
-  floatingLayer: {
-    ...StyleSheet.absoluteFill,
-    zIndex: 0,
-  },
-
-  floatingElement: {
+  backgroundCircle: {
     position: "absolute",
+    width: 230,
+    height: 230,
+    borderRadius: 115,
+    backgroundColor: "#E8F8F6",
+    right: -90,
+    top: 110,
+    opacity: 0.65,
+  },
+
+  header: {
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
+    marginBottom: 24,
   },
-
-  floatHeart: {
-    fontWeight: "800",
-  },
-
-  floatStar: {
-    fontWeight: "800",
-  },
-
-  /* BACK */
 
   backButton: {
-    marginTop: 45,
-    marginBottom: 28,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: "#FFFFFF",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 13,
   },
 
   backText: {
-    fontSize: 15,
-    color: C.deepTeal,
-    fontWeight: "700",
+    fontSize: 34,
+    lineHeight: 36,
+    color: "#164F52",
+    fontWeight: "300",
   },
 
-  /* HEADER */
-
-  label: {
-    fontSize: 11,
+  smallTitle: {
+    fontSize: 10,
     letterSpacing: 2,
-    color: C.deepTeal,
     fontWeight: "700",
+    color: "#19B7B0",
+    marginBottom: 3,
   },
 
-  title: {
-    fontSize: 38,
-    lineHeight: 43,
+  headerTitle: {
+    fontSize: 27,
     fontWeight: "700",
-    color: C.dark,
-    marginTop: 10,
+    color: "#164F52",
   },
 
-  subtitle: {
-    fontSize: 15,
-    lineHeight: 23,
-    color: C.muted,
-    marginTop: 14,
-  },
-
-  /* UNIQUE VISUAL */
-
-  visual: {
-    height: 280,
-    backgroundColor: C.paleTeal,
-    borderRadius: 32,
-    marginTop: 28,
+  introCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 28,
+    padding: 22,
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 28,
     overflow: "hidden",
-    alignItems: "center",
-    justifyContent: "flex-end",
   },
 
-  moonGlow: {
-    position: "absolute",
-    width: 180,
-    height: 180,
-    borderRadius: 90,
-    backgroundColor: C.yellow,
-    top: 20,
-    right: 20,
+  introTextContainer: {
+    flex: 1,
+    paddingRight: 5,
   },
 
-  moon: {
-    position: "absolute",
-    width: 95,
-    height: 95,
-    borderRadius: 48,
-    backgroundColor: C.deepTeal,
-    top: 55,
-    right: 65,
-  },
-
-  starOne: {
-    position: "absolute",
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-    backgroundColor: C.white,
-    top: 55,
-    left: 55,
-  },
-
-  starTwo: {
-    position: "absolute",
-    width: 5,
-    height: 5,
-    borderRadius: 3,
-    backgroundColor: C.white,
-    top: 105,
-    left: 90,
-  },
-
-  starThree: {
-    position: "absolute",
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: C.white,
-    top: 75,
-    right: 40,
-  },
-
-  meditationPerson: {
-    width: 160,
-    height: 170,
-    alignItems: "center",
-    position: "relative",
-    zIndex: 2,
-  },
-
-  head: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: "#D89578",
-    marginTop: 12,
-  },
-
-  body: {
-    width: 78,
-    height: 88,
-    borderTopLeftRadius: 42,
-    borderTopRightRadius: 42,
-    backgroundColor: C.deepTeal,
-    marginTop: 8,
-  },
-
-  leftLeg: {
-    position: "absolute",
-    width: 75,
-    height: 18,
-    borderRadius: 15,
-    backgroundColor: C.deepTeal,
-    bottom: 5,
-    left: 5,
-    transform: [{ rotate: "12deg" }],
-  },
-
-  rightLeg: {
-    position: "absolute",
-    width: 75,
-    height: 18,
-    borderRadius: 15,
-    backgroundColor: C.deepTeal,
-    bottom: 5,
-    right: 5,
-    transform: [{ rotate: "-12deg" }],
-  },
-
-  leftArm: {
-    position: "absolute",
-    width: 55,
-    height: 14,
-    borderRadius: 10,
-    backgroundColor: C.deepTeal,
-    left: 5,
-    top: 92,
-    transform: [{ rotate: "25deg" }],
-  },
-
-  rightArm: {
-    position: "absolute",
-    width: 55,
-    height: 14,
-    borderRadius: 10,
-    backgroundColor: C.deepTeal,
-    right: 5,
-    top: 92,
-    transform: [{ rotate: "-25deg" }],
-  },
-
-  ground: {
-    position: "absolute",
-    width: "75%",
-    height: 16,
-    borderRadius: 20,
-    backgroundColor: C.paleTeal,
-    bottom: 25,
-  },
-
-  /* DURATION */
-
-  durationCard: {
-    backgroundColor: C.white,
-    borderRadius: 25,
-    padding: 20,
-    marginTop: 20,
-    borderWidth: 1,
-    borderColor: C.paleTeal,
-  },
-
-  durationLabel: {
-    fontSize: 11,
-    letterSpacing: 2,
-    color: C.deepTeal,
+  introSmall: {
+    fontSize: 9,
+    letterSpacing: 1.5,
+    color: "#19B7B0",
     fontWeight: "700",
+    marginBottom: 9,
   },
 
-  durationTitle: {
-    fontSize: 19,
+  introTitle: {
+    fontSize: 29,
+    lineHeight: 32,
     fontWeight: "700",
-    color: C.dark,
-    marginTop: 7,
+    color: "#164F52",
+    marginBottom: 10,
+  },
+
+  introDescription: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: "#648384",
+  },
+
+  sectionTitle: {
+    fontSize: 10,
+    letterSpacing: 1.8,
+    fontWeight: "700",
+    color: "#648384",
+    marginBottom: 12,
+    marginLeft: 3,
   },
 
   durationRow: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    marginTop: 17,
+    gap: 10,
+    marginBottom: 22,
   },
 
   durationButton: {
-    width: "23%",
-    backgroundColor: C.cream,
-    borderRadius: 16,
-    paddingVertical: 12,
+    flex: 1,
+    minHeight: 65,
+    borderRadius: 18,
+    backgroundColor: "#FFFFFF",
     alignItems: "center",
-    borderWidth: 1,
-    borderColor: C.paleTeal,
+    justifyContent: "center",
   },
 
-  durationButtonActive: {
-    backgroundColor: C.deepTeal,
-    borderColor: C.deepTeal,
+  durationButtonSelected: {
+    backgroundColor: "#19B7B0",
   },
 
   durationNumber: {
-    fontSize: 19,
+    fontSize: 21,
     fontWeight: "700",
-    color: C.deepTeal,
+    color: "#164F52",
   },
 
-  durationNumberActive: {
-    color: C.white,
+  durationNumberSelected: {
+    color: "#FFFFFF",
   },
 
-  durationUnit: {
-    fontSize: 11,
-    color: C.muted,
-    marginTop: 2,
+  durationText: {
+    fontSize: 9,
+    color: "#648384",
+    marginTop: 1,
   },
 
-  durationUnitActive: {
-    color: C.paleTeal,
+  durationTextSelected: {
+    color: "#FFFFFF",
   },
 
-  /* READY CARD */
-
-  card: {
-    backgroundColor: C.white,
-    borderRadius: 28,
-    padding: 24,
-    marginTop: 20,
-    borderWidth: 1,
-    borderColor: C.paleTeal,
-    shadowColor: C.deepTeal,
-    shadowOpacity: 0.05,
-    shadowRadius: 10,
-    shadowOffset: {
-      width: 0,
-      height: 4,
-    },
-    elevation: 2,
-  },
-
-  cardLabel: {
-    fontSize: 11,
-    letterSpacing: 2,
-    color: C.deepTeal,
-    fontWeight: "700",
-  },
-
-  cardTitle: {
-    fontSize: 25,
-    fontWeight: "700",
-    color: C.dark,
-    marginTop: 8,
-  },
-
-  cardText: {
-    fontSize: 15,
-    lineHeight: 23,
-    color: C.muted,
-    marginTop: 12,
-  },
-
-  selectedTimeBox: {
-    flexDirection: "row",
-    alignItems: "baseline",
-    justifyContent: "center",
-    marginTop: 18,
-  },
-
-  selectedTime: {
-    fontSize: 38,
-    fontWeight: "700",
-    color: C.deepTeal,
-  },
-
-  selectedTimeUnit: {
-    fontSize: 15,
-    color: C.muted,
-    marginLeft: 7,
-  },
-
-  /* BUTTON */
-
-  primaryButton: {
-    backgroundColor: C.deepTeal,
+  meditationCard: {
+    backgroundColor: "#FFFFFF",
     borderRadius: 30,
-    paddingVertical: 15,
-    paddingHorizontal: 25,
-    alignItems: "center",
-    marginTop: 22,
-    shadowColor: C.deepTeal,
-    shadowOpacity: 0.18,
-    shadowRadius: 7,
-    shadowOffset: {
-      width: 0,
-      height: 4,
-    },
-    elevation: 3,
-  },
-
-  primaryText: {
-    color: C.white,
-    fontSize: 15,
-    fontWeight: "700",
-  },
-
-  /* ACTIVE MEDITATION */
-
-  activeCard: {
-    backgroundColor: C.paleTeal,
-    borderRadius: 28,
     padding: 25,
-    marginTop: 20,
+    alignItems: "center",
+    marginBottom: 28,
+    minHeight: 410,
+    justifyContent: "center",
+  },
+
+  breathCircle: {
+    width: 180,
+    height: 180,
+    borderRadius: 90,
+    backgroundColor: "#E8F8F6",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 22,
+  },
+
+  activeBreathCircle: {
+    backgroundColor: "#DDF4F1",
+  },
+
+  innerCircle: {
+    width: 138,
+    height: 138,
+    borderRadius: 69,
+    backgroundColor: "#FFFFFF",
+    justifyContent: "center",
     alignItems: "center",
   },
 
-  breatheText: {
-    textAlign: "center",
-    fontSize: 23,
+  breathText: {
+    fontSize: 35,
     fontWeight: "700",
-    color: C.dark,
-    marginTop: 20,
-  },
-
-  breathingStage: {
-    width: 250,
-    height: 250,
-    marginTop: 22,
-    alignItems: "center",
-    justifyContent: "center",
-    position: "relative",
-  },
-
-  breathAccentOne: {
-    position: "absolute",
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: C.yellow,
-    top: 25,
-    left: 34,
-  },
-
-  breathAccentTwo: {
-    position: "absolute",
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    backgroundColor: C.coral,
-    top: 42,
-    right: 34,
-  },
-
-  breathAccentThree: {
-    position: "absolute",
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: C.teal,
-    bottom: 28,
-    left: 42,
-  },
-
-  breathCircleOuter: {
-    width: 220,
-    height: 220,
-    borderRadius: 110,
-    backgroundColor: C.white,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  breathCircleInner: {
-    width: 175,
-    height: 175,
-    borderRadius: 88,
-    backgroundColor: C.deepTeal,
-    alignItems: "center",
-    justifyContent: "center",
+    color: "#19B7B0",
   },
 
   timerText: {
-    fontSize: 40,
+    fontSize: 30,
     fontWeight: "700",
-    color: C.white,
+    color: "#19B7B0",
   },
 
-  timerLabel: {
-    fontSize: 12,
-    color: C.paleTeal,
-    marginTop: 3,
-  },
-
-  breathInstruction: {
-    fontSize: 14,
-    lineHeight: 21,
-    color: C.muted,
-    textAlign: "center",
-    marginTop: 22,
-  },
-
-  finishButton: {
-    borderWidth: 1.5,
-    borderColor: C.deepTeal,
-    borderRadius: 26,
-    paddingHorizontal: 25,
-    paddingVertical: 12,
-    marginTop: 20,
-  },
-
-  finishButtonText: {
-    color: C.deepTeal,
-    fontSize: 14,
+  breathLabel: {
+    fontSize: 9,
+    letterSpacing: 1.5,
     fontWeight: "700",
-  },
-
-  /* COMPLETED */
-
-  completedCard: {
-    backgroundColor: C.paleTeal,
-    borderRadius: 28,
-    padding: 25,
-    marginTop: 20,
-    alignItems: "center",
-  },
-
-  completedCircle: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: C.deepTeal,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  completedHeart: {
-    fontSize: 35,
-    color: C.white,
-    fontWeight: "700",
-  },
-
-  completedLabel: {
-    fontSize: 10,
-    letterSpacing: 2,
-    color: C.deepTeal,
-    fontWeight: "700",
-    marginTop: 18,
-  },
-
-  completedTitle: {
-    fontSize: 24,
-    fontWeight: "700",
-    color: C.dark,
-    textAlign: "center",
-    marginTop: 10,
-  },
-
-  completedText: {
-    fontSize: 15,
-    lineHeight: 22,
-    color: C.muted,
-    textAlign: "center",
-    marginTop: 10,
-  },
-
-  completedTimeBox: {
-    backgroundColor: C.cream,
-    borderRadius: 18,
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    alignItems: "center",
-    marginTop: 18,
-  },
-
-  completedTime: {
-    fontSize: 25,
-    fontWeight: "700",
-    color: C.deepTeal,
-  },
-
-  completedTimeLabel: {
-    fontSize: 12,
-    color: C.muted,
+    color: "#648384",
     marginTop: 2,
   },
 
-  /* OPTIONS */
-
-  options: {
-    marginTop: 30,
-  },
-
-  optionsTitle: {
-    fontSize: 20,
+  meditationTitle: {
+    fontSize: 21,
     fontWeight: "700",
-    color: C.dark,
-    marginBottom: 15,
+    color: "#164F52",
+    textAlign: "center",
+    marginBottom: 9,
   },
 
-  optionRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-  },
-
-  option: {
-    width: "48%",
-    backgroundColor: C.white,
-    borderRadius: 20,
-    padding: 17,
-    borderWidth: 1,
-    borderColor: C.paleTeal,
-  },
-
-  optionNumber: {
+  meditationDescription: {
     fontSize: 12,
-    color: C.deepTeal,
+    lineHeight: 18,
+    color: "#648384",
+    textAlign: "center",
+    maxWidth: 290,
+    marginBottom: 22,
+  },
+
+  startButton: {
+    backgroundColor: "#19B7B0",
+    paddingVertical: 14,
+    paddingHorizontal: 27,
+    borderRadius: 25,
+    minWidth: 190,
+    alignItems: "center",
+  },
+
+  startButtonText: {
+    color: "#FFFFFF",
+    fontSize: 10,
+    letterSpacing: 1.2,
     fontWeight: "700",
   },
 
-  optionTitle: {
+  stopButton: {
+    backgroundColor: "#FFF0ED",
+    paddingVertical: 14,
+    paddingHorizontal: 27,
+    borderRadius: 25,
+    minWidth: 150,
+    alignItems: "center",
+  },
+
+  stopButtonText: {
+    color: "#FF6B6B",
+    fontSize: 10,
+    letterSpacing: 1.2,
+    fontWeight: "700",
+  },
+
+  completedCircle: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: "#E8F8F6",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 20,
+  },
+
+  completedMark: {
+    fontSize: 45,
+    color: "#19B7B0",
+    fontWeight: "500",
+  },
+
+  completedTitle: {
+    fontSize: 25,
+    fontWeight: "700",
+    color: "#164F52",
+    marginBottom: 8,
+  },
+
+  encouragement: {
+    fontSize: 13,
+    lineHeight: 20,
+    color: "#648384",
+    textAlign: "center",
+    maxWidth: 280,
+    marginBottom: 20,
+  },
+
+  completedInfo: {
+    backgroundColor: "#F7FCFB",
+    borderRadius: 18,
+    paddingVertical: 13,
+    paddingHorizontal: 30,
+    alignItems: "center",
+    marginBottom: 20,
+  },
+
+  completedInfoSmall: {
+    fontSize: 8,
+    letterSpacing: 1.3,
+    fontWeight: "700",
+    color: "#648384",
+    marginBottom: 4,
+  },
+
+  completedInfoMain: {
     fontSize: 16,
     fontWeight: "700",
-    color: C.dark,
-    marginTop: 8,
+    color: "#19B7B0",
   },
 
-  optionText: {
-    fontSize: 13,
-    color: C.muted,
-    marginTop: 5,
-  },
-
-  /* HISTORY */
-
-  historySection: {
-    marginTop: 32,
-  },
-
-  statsRow: {
+  statsCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 22,
+    paddingVertical: 20,
     flexDirection: "row",
-    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 28,
   },
 
-  statCard: {
-    width: "48%",
-    backgroundColor: C.white,
-    borderRadius: 20,
-    padding: 18,
-    borderWidth: 1,
-    borderColor: C.paleTeal,
+  statItem: {
+    flex: 1,
+    alignItems: "center",
   },
 
   statNumber: {
-    fontSize: 28,
+    fontSize: 26,
     fontWeight: "700",
-    color: C.deepTeal,
+    color: "#164F52",
+    marginBottom: 3,
   },
 
   statLabel: {
-    fontSize: 13,
-    color: C.muted,
-    marginTop: 3,
-  },
-
-  emptyHistory: {
-    backgroundColor: C.paleTeal,
-    borderRadius: 22,
-    padding: 24,
-    alignItems: "center",
-    marginTop: 15,
-  },
-
-  emptyHistoryIcon: {
-    fontSize: 35,
-    color: C.teal,
-  },
-
-  emptyHistoryTitle: {
-    fontSize: 17,
+    fontSize: 8,
+    letterSpacing: 1.2,
     fontWeight: "700",
-    color: C.dark,
-    marginTop: 8,
+    color: "#648384",
   },
 
-  emptyHistoryText: {
-    fontSize: 13,
-    lineHeight: 19,
-    color: C.muted,
-    textAlign: "center",
-    marginTop: 6,
+  statDivider: {
+    width: 1,
+    height: 38,
+    backgroundColor: "#E4EEEE",
   },
 
-  historyList: {
-    marginTop: 15,
+  historyCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 22,
+    paddingHorizontal: 18,
+    marginBottom: 28,
   },
 
-  historyItem: {
-    backgroundColor: C.white,
-    borderRadius: 20,
-    padding: 15,
-    marginBottom: 10,
+  historyRow: {
+    minHeight: 70,
     flexDirection: "row",
     alignItems: "center",
-    borderWidth: 1,
-    borderColor: C.paleTeal,
+    justifyContent: "space-between",
+    borderBottomWidth: 1,
+    borderBottomColor: "#EEF4F3",
   },
 
-  historyIcon: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: C.paleTeal,
+  historyLeft: {
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
   },
 
-  historyIconText: {
-    fontSize: 22,
-    color: C.teal,
-  },
-
-  historyInfo: {
-    flex: 1,
-    marginLeft: 12,
+  historyDot: {
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    backgroundColor: "#19B7B0",
+    marginRight: 12,
   },
 
   historyTitle: {
-    fontSize: 14,
-    fontWeight: "700",
-    color: C.dark,
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#164F52",
+    marginBottom: 3,
   },
 
   historyDate: {
-    fontSize: 12,
-    color: C.muted,
-    marginTop: 4,
+    fontSize: 10,
+    color: "#648384",
   },
 
-  historyCheck: {
-    fontSize: 18,
+  historyDuration: {
+    fontSize: 11,
     fontWeight: "700",
-    color: C.teal,
+    color: "#19B7B0",
+  },
+
+  reminderCard: {
+    backgroundColor: "#FFF0ED",
+    borderRadius: 22,
+    padding: 19,
+    marginBottom: 18,
+  },
+
+  reminderLabel: {
+    fontSize: 9,
+    letterSpacing: 1.5,
+    color: "#FF6B6B",
+    fontWeight: "700",
+    marginBottom: 7,
+  },
+
+  reminderText: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: "#164F52",
+  },
+
+  voiceCard: {
+    backgroundColor: "#164F52",
+    borderRadius: 22,
+    padding: 20,
+  },
+
+  voiceLabel: {
+    fontSize: 8,
+    letterSpacing: 1.5,
+    color: "#8DE3DD",
+    fontWeight: "700",
+    marginBottom: 7,
+  },
+
+  voiceCommand: {
+    fontSize: 17,
+    fontWeight: "600",
+    color: "#FFFFFF",
+    marginBottom: 7,
+  },
+
+  voiceDescription: {
+    fontSize: 11,
+    lineHeight: 17,
+    color: "#C5DEDD",
   },
 });

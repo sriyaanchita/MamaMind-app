@@ -1,9 +1,9 @@
+
+import { signInWithEmailAndPassword } from "firebase/auth";
+import { doc, getDoc } from "firebase/firestore";
 import { useRouter } from "expo-router";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import {
-  Animated,
-  Dimensions,
-  Easing,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -16,11 +16,7 @@ import {
   View,
 } from "react-native";
 
-const { width, height } = Dimensions.get("window");
-
-/* =========================================================
-   SAME PALETTE AS INDEX PAGE
-========================================================= */
+import { auth, db } from "../services/firebase";
 
 const C = {
   yellow: "#FFDA57",
@@ -28,23 +24,11 @@ const C = {
   deepTeal: "#0E7C86",
   white: "#FFFFFF",
   coral: "#FF6B6B",
-
   cream: "#FFF9E8",
   paleTeal: "#E8F8F6",
   dark: "#164F52",
   muted: "#648384",
 } as const;
-
-/* =========================================================
-   FLOATING ELEMENT
-========================================================= */
-
-type FloatItem = {
-  x: Animated.Value;
-  y: Animated.Value;
-  rotate: Animated.Value;
-  scale: Animated.Value;
-};
 
 export default function LoginScreen() {
   const router = useRouter();
@@ -53,242 +37,81 @@ export default function LoginScreen() {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  /* =======================================================
-     PAGE ANIMATION
-  ======================================================= */
-
-  const pageOpacity = useRef(new Animated.Value(0)).current;
-  const pageScale = useRef(new Animated.Value(0.97)).current;
-
-  /* =======================================================
-     FLOATING OBJECTS
-  ======================================================= */
-
-  const createFloatItem = (): FloatItem => ({
-    x: new Animated.Value(0),
-    y: new Animated.Value(0),
-    rotate: new Animated.Value(0),
-    scale: new Animated.Value(1),
-  });
-
-  const items = useRef([
-    createFloatItem(),
-    createFloatItem(),
-    createFloatItem(),
-    createFloatItem(),
-    createFloatItem(),
-    createFloatItem(),
-    createFloatItem(),
-    createFloatItem(),
-  ]).current;
-
-  /* =======================================================
-     PAGE + FLOATING ANIMATION
-  ======================================================= */
-
-  useEffect(() => {
-    Animated.parallel([
-      Animated.timing(pageOpacity, {
-        toValue: 1,
-        duration: 800,
-        useNativeDriver: true,
-      }),
-
-      Animated.spring(pageScale, {
-        toValue: 1,
-        tension: 45,
-        friction: 8,
-        useNativeDriver: true,
-      }),
-    ]).start();
-
-    const paths = [
-      {
-        duration: 6000,
-        x1: -width * 0.35,
-        y1: -80,
-        x2: width * 0.35,
-        y2: 120,
-      },
-      {
-        duration: 7200,
-        x1: width * 0.38,
-        y1: -120,
-        x2: -width * 0.38,
-        y2: 100,
-      },
-      {
-        duration: 6500,
-        x1: -width * 0.3,
-        y1: 130,
-        x2: width * 0.35,
-        y2: -100,
-      },
-      {
-        duration: 7600,
-        x1: width * 0.4,
-        y1: 130,
-        x2: -width * 0.35,
-        y2: -120,
-      },
-      {
-        duration: 5800,
-        x1: -width * 0.4,
-        y1: 20,
-        x2: width * 0.4,
-        y2: 150,
-      },
-      {
-        duration: 6800,
-        x1: width * 0.35,
-        y1: 160,
-        x2: -width * 0.4,
-        y2: -50,
-      },
-      {
-        duration: 6200,
-        x1: -width * 0.35,
-        y1: -120,
-        x2: width * 0.4,
-        y2: 40,
-      },
-      {
-        duration: 7400,
-        x1: width * 0.4,
-        y1: 80,
-        x2: -width * 0.35,
-        y2: -100,
-      },
-    ];
-
-    items.forEach((item, index) => {
-      const p = paths[index];
-
-      const animate = () => {
-        Animated.sequence([
-          Animated.parallel([
-            Animated.timing(item.x, {
-              toValue: p.x1,
-              duration: p.duration,
-              easing: Easing.inOut(Easing.sin),
-              useNativeDriver: true,
-            }),
-
-            Animated.timing(item.y, {
-              toValue: p.y1,
-              duration: p.duration,
-              easing: Easing.inOut(Easing.sin),
-              useNativeDriver: true,
-            }),
-
-            Animated.timing(item.rotate, {
-              toValue: 1,
-              duration: p.duration,
-              easing: Easing.inOut(Easing.sin),
-              useNativeDriver: true,
-            }),
-          ]),
-
-          Animated.parallel([
-            Animated.timing(item.x, {
-              toValue: p.x2,
-              duration: p.duration * 1.2,
-              easing: Easing.inOut(Easing.sin),
-              useNativeDriver: true,
-            }),
-
-            Animated.timing(item.y, {
-              toValue: p.y2,
-              duration: p.duration * 1.2,
-              easing: Easing.inOut(Easing.sin),
-              useNativeDriver: true,
-            }),
-
-            Animated.timing(item.rotate, {
-              toValue: 2,
-              duration: p.duration * 1.2,
-              easing: Easing.inOut(Easing.sin),
-              useNativeDriver: true,
-            }),
-          ]),
-
-          Animated.parallel([
-            Animated.timing(item.x, {
-              toValue: 0,
-              duration: p.duration,
-              easing: Easing.inOut(Easing.sin),
-              useNativeDriver: true,
-            }),
-
-            Animated.timing(item.y, {
-              toValue: 0,
-              duration: p.duration,
-              easing: Easing.inOut(Easing.sin),
-              useNativeDriver: true,
-            }),
-
-            Animated.timing(item.rotate, {
-              toValue: 3,
-              duration: p.duration,
-              easing: Easing.inOut(Easing.sin),
-              useNativeDriver: true,
-            }),
-          ]),
-        ]).start(({ finished }) => {
-          if (finished) {
-            animate();
-          }
-        });
-      };
-
-      const timer = setTimeout(animate, index * 280);
-
-      return () => clearTimeout(timer);
-    });
-  }, []);
-
-  /* =======================================================
-     LOGIN
-  ======================================================= */
-
-  const handleLogin = () => {
+  const handleLogin = async () => {
     setError("");
 
     if (!email.trim() || !password.trim()) {
-      setError("Just a little more — enter your email and password. 💛");
+      setError("Please enter your email and password.");
       return;
     }
 
     if (!email.includes("@")) {
-      setError("That email looks a little unusual. Check it once more. 🌷");
+      setError("Please enter a valid email address.");
       return;
     }
 
-    // Connect your Supabase authentication here later.
-    router.replace("/mother-dashboard");
+    try {
+      setLoading(true);
+
+      // Sign in with Firebase Authentication
+      const credential = await signInWithEmailAndPassword(
+        auth,
+        email.trim(),
+        password
+      );
+
+      // Retrieve the role saved for this specific user
+      const userRef = doc(db, "users", credential.user.uid);
+      const userSnapshot = await getDoc(userRef);
+
+      if (!userSnapshot.exists()) {
+        setError(
+          "Your profile was not found. Please complete your account setup."
+        );
+        return;
+      }
+
+      const userData = userSnapshot.data();
+      const role = userData.role;
+
+      // Navigate according to the saved role
+      if (role === "father") {
+        router.replace("/father-dashboard");
+      } else if (role === "mother") {
+        router.replace("/mother-dashboard");
+      } else {
+        setError(
+          "Your account role is missing or invalid. Please complete your profile setup."
+        );
+      }
+    } catch (error: any) {
+      console.log("LOGIN ERROR:", error?.code, error?.message);
+
+      if (
+        error?.code === "auth/user-not-found" ||
+        error?.code === "auth/invalid-credential"
+      ) {
+        setError("Email or password is incorrect.");
+      } else if (error?.code === "auth/wrong-password") {
+        setError("Incorrect password. Please try again.");
+      } else if (error?.code === "auth/invalid-email") {
+        setError("Please enter a valid email address.");
+      } else if (error?.code === "auth/too-many-requests") {
+        setError("Too many attempts. Please try again later.");
+      } else if (
+        error?.code === "permission-denied" ||
+        error?.code === "firestore/permission-denied"
+      ) {
+        setError("Unable to access your profile. Please check Firebase permissions.");
+      } else {
+        setError("Unable to log in. Please try again.");
+      }
+    } finally {
+      setLoading(false);
+    }
   };
-
-  /* =======================================================
-     FLOATING ELEMENT STYLE
-  ======================================================= */
-
-  const floatingStyle = (item: FloatItem) => ({
-    transform: [
-      {
-        translateX: item.x,
-      },
-      {
-        translateY: item.y,
-      },
-      {
-        rotate: item.rotate.interpolate({
-          inputRange: [0, 1, 2, 3],
-          outputRange: ["0deg", "8deg", "-8deg", "0deg"],
-        }),
-      },
-    ],
-  });
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -306,102 +129,8 @@ export default function LoginScreen() {
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={styles.scroll}
         >
-          <Animated.View
-            style={[
-              styles.page,
-              {
-                opacity: pageOpacity,
-                transform: [{ scale: pageScale }],
-              },
-            ]}
-          >
-            {/* =================================================
-                FLOATING WORLD
-            ================================================= */}
-
-            <View
-              pointerEvents="none"
-              style={styles.floatingWorld}
-            >
-              {/* Bubble */}
-              <Animated.View
-                style={[
-                  styles.bigBubble,
-                  floatingStyle(items[0]),
-                ]}
-              >
-                <View style={styles.bubbleHighlight} />
-              </Animated.View>
-
-              {/* Coral flower */}
-              <Animated.View
-                style={[
-                  styles.flower,
-                  floatingStyle(items[1]),
-                ]}
-              >
-                <Text style={styles.flowerText}>✿</Text>
-              </Animated.View>
-
-              {/* Heart */}
-              <Animated.View
-                style={[
-                  styles.heart,
-                  floatingStyle(items[2]),
-                ]}
-              >
-                <Text style={styles.heartText}>♡</Text>
-              </Animated.View>
-
-              {/* Star */}
-              <Animated.View
-                style={[
-                  styles.star,
-                  floatingStyle(items[3]),
-                ]}
-              >
-                <Text style={styles.starText}>✦</Text>
-              </Animated.View>
-
-              {/* Yellow dot */}
-              <Animated.View
-                style={[
-                  styles.yellowDot,
-                  floatingStyle(items[4]),
-                ]}
-              />
-
-              {/* Teal dot */}
-              <Animated.View
-                style={[
-                  styles.tealDot,
-                  floatingStyle(items[5]),
-                ]}
-              />
-
-              {/* Ring */}
-              <Animated.View
-                style={[
-                  styles.ring,
-                  floatingStyle(items[6]),
-                ]}
-              />
-
-              {/* Sparkle */}
-              <Animated.View
-                style={[
-                  styles.sparkle,
-                  floatingStyle(items[7]),
-                ]}
-              >
-                <Text style={styles.sparkleText}>✧</Text>
-              </Animated.View>
-            </View>
-
-            {/* =================================================
-                TOP BRAND
-            ================================================= */}
-
+          <View style={styles.page}>
+            {/* TOP BRAND */}
             <View style={styles.topBar}>
               <Pressable
                 onPress={() => router.push("/")}
@@ -434,10 +163,7 @@ export default function LoginScreen() {
               </View>
             </View>
 
-            {/* =================================================
-                LOGIN CONTENT
-            ================================================= */}
-
+            {/* LOGIN CONTENT */}
             <View style={styles.content}>
               <View style={styles.welcomePill}>
                 <View style={styles.pillDot} />
@@ -461,10 +187,7 @@ export default function LoginScreen() {
                 There is nothing you need to have figured out.
               </Text>
 
-              {/* =================================================
-                  FORM CARD
-              ================================================= */}
-
+              {/* FORM CARD */}
               <View style={styles.card}>
                 <Text style={styles.cardTitle}>
                   Let's pick up where we left off.
@@ -475,7 +198,6 @@ export default function LoginScreen() {
                 </Text>
 
                 {/* EMAIL */}
-
                 <View style={styles.inputGroup}>
                   <Text style={styles.label}>
                     EMAIL
@@ -503,7 +225,6 @@ export default function LoginScreen() {
                 </View>
 
                 {/* PASSWORD */}
-
                 <View style={styles.inputGroup}>
                   <Text style={styles.label}>
                     PASSWORD
@@ -523,6 +244,7 @@ export default function LoginScreen() {
                       placeholder="Your password"
                       placeholderTextColor="#9BAFAE"
                       secureTextEntry={!showPassword}
+                      autoCapitalize="none"
                       style={styles.input}
                     />
 
@@ -539,12 +261,11 @@ export default function LoginScreen() {
                   </View>
                 </View>
 
-                {/* FORGOT */}
-
+                {/* FORGOT PASSWORD */}
                 <Pressable
                   onPress={() => {
                     setError(
-                      "We'll help you get back in. Password reset can be connected to Supabase here. 💛"
+                      "Password reset can be connected here."
                     );
                   }}
                   style={styles.forgotButton}
@@ -555,7 +276,6 @@ export default function LoginScreen() {
                 </Pressable>
 
                 {/* ERROR */}
-
                 {error ? (
                   <View style={styles.messageBox}>
                     <Text style={styles.messageText}>
@@ -565,27 +285,29 @@ export default function LoginScreen() {
                 ) : null}
 
                 {/* LOGIN BUTTON */}
-
                 <Pressable
                   onPress={handleLogin}
+                  disabled={loading}
                   style={({ pressed }) => [
                     styles.loginButton,
                     pressed && styles.buttonPressed,
+                    loading && styles.buttonDisabled,
                   ]}
                 >
                   <Text style={styles.loginButtonText}>
-                    Log me in
+                    {loading ? "Logging in..." : "Log me in"}
                   </Text>
 
-                  <View style={styles.arrowCircle}>
-                    <Text style={styles.arrow}>
-                      →
-                    </Text>
-                  </View>
+                  {!loading && (
+                    <View style={styles.arrowCircle}>
+                      <Text style={styles.arrow}>
+                        →
+                      </Text>
+                    </View>
+                  )}
                 </Pressable>
 
                 {/* DIVIDER */}
-
                 <View style={styles.dividerRow}>
                   <View style={styles.divider} />
 
@@ -597,16 +319,17 @@ export default function LoginScreen() {
                 </View>
 
                 {/* GOOGLE */}
-
                 <Pressable
                   onPress={() => {
                     setError(
-                      "Google sign-in can be connected here when authentication is enabled. 🌷"
+                      "Google sign-in is not connected yet."
                     );
                   }}
                   style={({ pressed }) => [
                     styles.googleButton,
-                    pressed && { transform: [{ scale: 0.98 }] },
+                    pressed && {
+                      transform: [{ scale: 0.98 }],
+                    },
                   ]}
                 >
                   <View style={styles.googleCircle}>
@@ -621,10 +344,7 @@ export default function LoginScreen() {
                 </Pressable>
               </View>
 
-              {/* =================================================
-                  KIND REMINDER
-              ================================================= */}
-
+              {/* REMINDER */}
               <View style={styles.reminder}>
                 <View style={styles.reminderIcon}>
                   <Text>🌷</Text>
@@ -642,7 +362,6 @@ export default function LoginScreen() {
               </View>
 
               {/* SIGNUP */}
-
               <View style={styles.bottomSignup}>
                 <Text style={styles.bottomText}>
                   Don't have a MamaMind account?
@@ -657,16 +376,12 @@ export default function LoginScreen() {
                 </Pressable>
               </View>
             </View>
-          </Animated.View>
+          </View>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
-
-/* =========================================================
-   STYLES
-========================================================= */
 
 const styles = StyleSheet.create({
   safe: {
@@ -681,122 +396,10 @@ const styles = StyleSheet.create({
 
   page: {
     flex: 1,
-    minHeight: height,
+    minHeight: "100%",
     backgroundColor: C.cream,
     overflow: "hidden",
-    position: "relative",
   },
-
-  /* =======================================================
-     FLOATING WORLD
-  ======================================================= */
-
-  floatingWorld: {
-    ...StyleSheet.absoluteFill,
-    overflow: "hidden",
-  },
-
-  bigBubble: {
-    position: "absolute",
-    left: width * 0.08,
-    top: height * 0.20,
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    borderWidth: 3,
-    borderColor: C.teal,
-    backgroundColor: "#FFFFFF55",
-  },
-
-  bubbleHighlight: {
-    position: "absolute",
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: C.white,
-    left: 10,
-    top: 9,
-  },
-
-  flower: {
-    position: "absolute",
-    left: width * 0.08,
-    top: height * 0.62,
-  },
-
-  flowerText: {
-    fontSize: 48,
-    color: C.coral,
-  },
-
-  heart: {
-    position: "absolute",
-    right: width * 0.10,
-    top: height * 0.20,
-  },
-
-  heartText: {
-    color: C.coral,
-    fontSize: 62,
-    fontWeight: "300",
-  },
-
-  star: {
-    position: "absolute",
-    right: width * 0.12,
-    top: height * 0.45,
-  },
-
-  starText: {
-    color: C.deepTeal,
-    fontSize: 40,
-  },
-
-  yellowDot: {
-    position: "absolute",
-    right: width * 0.30,
-    top: height * 0.13,
-    width: 19,
-    height: 19,
-    borderRadius: 10,
-    backgroundColor: C.yellow,
-  },
-
-  tealDot: {
-    position: "absolute",
-    left: width * 0.25,
-    top: height * 0.38,
-    width: 13,
-    height: 13,
-    borderRadius: 7,
-    backgroundColor: C.teal,
-  },
-
-  ring: {
-    position: "absolute",
-    right: width * 0.20,
-    top: height * 0.70,
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    borderWidth: 4,
-    borderColor: C.yellow,
-  },
-
-  sparkle: {
-    position: "absolute",
-    left: width * 0.20,
-    top: height * 0.78,
-  },
-
-  sparkleText: {
-    color: C.coral,
-    fontSize: 36,
-  },
-
-  /* =======================================================
-     TOP BAR
-  ======================================================= */
 
   topBar: {
     width: "100%",
@@ -805,7 +408,6 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    zIndex: 10,
   },
 
   brand: {
@@ -853,17 +455,12 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
 
-  /* =======================================================
-     CONTENT
-  ======================================================= */
-
   content: {
     width: "100%",
     maxWidth: 520,
     alignSelf: "center",
     paddingHorizontal: 24,
     paddingTop: 35,
-    zIndex: 5,
   },
 
   welcomePill: {
@@ -921,15 +518,10 @@ const styles = StyleSheet.create({
     marginBottom: 25,
   },
 
-  /* =======================================================
-     CARD
-  ======================================================= */
-
   card: {
     backgroundColor: C.white,
     borderRadius: 30,
     padding: 24,
-
     shadowColor: C.dark,
     shadowOffset: {
       width: 0,
@@ -1040,7 +632,6 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingLeft: 22,
     paddingRight: 8,
-
     shadowColor: C.deepTeal,
     shadowOffset: {
       width: 0,
@@ -1053,6 +644,10 @@ const styles = StyleSheet.create({
 
   buttonPressed: {
     transform: [{ scale: 0.97 }],
+  },
+
+  buttonDisabled: {
+    opacity: 0.7,
   },
 
   loginButtonText: {
@@ -1076,10 +671,6 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
 
-  /* =======================================================
-     DIVIDER
-  ======================================================= */
-
   dividerRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -1098,10 +689,6 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     marginHorizontal: 12,
   },
-
-  /* =======================================================
-     GOOGLE
-  ======================================================= */
 
   googleButton: {
     minHeight: 52,
@@ -1136,10 +723,6 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
 
-  /* =======================================================
-     REMINDER
-  ======================================================= */
-
   reminder: {
     marginTop: 22,
     backgroundColor: C.white,
@@ -1148,7 +731,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     flexDirection: "row",
     alignItems: "center",
-
     shadowColor: C.dark,
     shadowOffset: {
       width: 0,
@@ -1206,3 +788,4 @@ const styles = StyleSheet.create({
     marginTop: 5,
   },
 });
+

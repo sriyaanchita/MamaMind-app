@@ -1,5 +1,8 @@
+
 import React, { useEffect, useRef, useState } from "react";
 import {
+  ActivityIndicator,
+  Alert,
   Animated,
   Easing,
   Pressable,
@@ -10,6 +13,19 @@ import {
   View,
 } from "react-native";
 import { router } from "expo-router";
+import { onAuthStateChanged } from "firebase/auth";
+import {
+  addDoc,
+  collection,
+  deleteDoc,
+  doc,
+  onSnapshot,
+  orderBy,
+  query,
+  serverTimestamp,
+} from "firebase/firestore";
+
+import { auth, db } from "../services/firebase";
 
 /* -------------------------------------------------------
    MAMAMIND COLOUR PALETTE
@@ -27,56 +43,43 @@ const C = {
   muted: "#648384",
 };
 
+type HappyMoment = {
+  id: string;
+  text: string;
+};
+
 /* -------------------------------------------------------
    HAPPY JAR
 ------------------------------------------------------- */
 
 export default function HappyJar() {
   const [moment, setMoment] = useState("");
-  const [moments, setMoments] = useState<string[]>([]);
+  const [moments, setMoments] = useState<HappyMoment[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   /* -------------------------------------------------------
      JAR ANIMATIONS
   ------------------------------------------------------- */
 
-  const jarFloat = useRef(
-    new Animated.Value(0)
-  ).current;
+  const jarFloat = useRef(new Animated.Value(0)).current;
+  const jarScale = useRef(new Animated.Value(1)).current;
+  const jarGlow = useRef(new Animated.Value(0)).current;
 
-  const jarScale = useRef(
-    new Animated.Value(1)
-  ).current;
+  const heartFloatOne = useRef(new Animated.Value(0)).current;
+  const heartFloatTwo = useRef(new Animated.Value(0)).current;
+  const heartFloatThree = useRef(new Animated.Value(0)).current;
+  const heartFloatFour = useRef(new Animated.Value(0)).current;
 
-  const jarGlow = useRef(
-    new Animated.Value(0)
-  ).current;
-
-  const heartFloatOne = useRef(
-    new Animated.Value(0)
-  ).current;
-
-  const heartFloatTwo = useRef(
-    new Animated.Value(0)
-  ).current;
-
-  const heartFloatThree = useRef(
-    new Animated.Value(0)
-  ).current;
-
-  const heartFloatFour = useRef(
-    new Animated.Value(0)
-  ).current;
-
-  const newHeartScale = useRef(
-    new Animated.Value(1)
-  ).current;
+  const newHeartScale = useRef(new Animated.Value(1)).current;
 
   /* -------------------------------------------------------
      JAR FLOATING ANIMATION
   ------------------------------------------------------- */
 
   useEffect(() => {
-    Animated.loop(
+    const animation = Animated.loop(
       Animated.sequence([
         Animated.timing(jarFloat, {
           toValue: -5,
@@ -84,14 +87,12 @@ export default function HappyJar() {
           easing: Easing.inOut(Easing.sin),
           useNativeDriver: true,
         }),
-
         Animated.timing(jarFloat, {
           toValue: 5,
           duration: 3000,
           easing: Easing.inOut(Easing.sin),
           useNativeDriver: true,
         }),
-
         Animated.timing(jarFloat, {
           toValue: 0,
           duration: 2400,
@@ -99,22 +100,33 @@ export default function HappyJar() {
           useNativeDriver: true,
         }),
       ])
-    ).start();
-  }, []);
+    );
+
+    animation.start();
+
+    return () => animation.stop();
+  }, [jarFloat]);
 
   /* -------------------------------------------------------
      HEART FLOATING ANIMATIONS
   ------------------------------------------------------- */
 
   useEffect(() => {
+    let cancelled = false;
+
+    const animations: Animated.CompositeAnimation[] = [];
+    const timers: ReturnType<typeof setTimeout>[] = [];
+
     const createHeartAnimation = (
       value: Animated.Value,
       distance: number,
       duration: number,
       delay: number
     ) => {
-      setTimeout(() => {
-        Animated.loop(
+      const timer = setTimeout(() => {
+        if (cancelled) return;
+
+        const animation = Animated.loop(
           Animated.sequence([
             Animated.timing(value, {
               toValue: distance,
@@ -122,7 +134,6 @@ export default function HappyJar() {
               easing: Easing.inOut(Easing.sin),
               useNativeDriver: true,
             }),
-
             Animated.timing(value, {
               toValue: -distance,
               duration,
@@ -130,45 +141,38 @@ export default function HappyJar() {
               useNativeDriver: true,
             }),
           ])
-        ).start();
+        );
+
+        animations.push(animation);
+        animation.start();
       }, delay);
+
+      timers.push(timer);
     };
 
-    createHeartAnimation(
-      heartFloatOne,
-      7,
-      2200,
-      0
-    );
+    createHeartAnimation(heartFloatOne, 7, 2200, 0);
+    createHeartAnimation(heartFloatTwo, -6, 2500, 400);
+    createHeartAnimation(heartFloatThree, 8, 2300, 700);
+    createHeartAnimation(heartFloatFour, -7, 2700, 1000);
 
-    createHeartAnimation(
-      heartFloatTwo,
-      -6,
-      2500,
-      400
-    );
-
-    createHeartAnimation(
-      heartFloatThree,
-      8,
-      2300,
-      700
-    );
-
-    createHeartAnimation(
-      heartFloatFour,
-      -7,
-      2700,
-      1000
-    );
-  }, []);
+    return () => {
+      cancelled = true;
+      timers.forEach(clearTimeout);
+      animations.forEach((animation) => animation.stop());
+    };
+  }, [
+    heartFloatOne,
+    heartFloatTwo,
+    heartFloatThree,
+    heartFloatFour,
+  ]);
 
   /* -------------------------------------------------------
      SOFT JAR GLOW
   ------------------------------------------------------- */
 
   useEffect(() => {
-    Animated.loop(
+    const animation = Animated.loop(
       Animated.sequence([
         Animated.timing(jarGlow, {
           toValue: 1,
@@ -176,7 +180,6 @@ export default function HappyJar() {
           easing: Easing.inOut(Easing.sin),
           useNativeDriver: false,
         }),
-
         Animated.timing(jarGlow, {
           toValue: 0,
           duration: 2200,
@@ -184,60 +187,216 @@ export default function HappyJar() {
           useNativeDriver: false,
         }),
       ])
-    ).start();
+    );
+
+    animation.start();
+
+    return () => animation.stop();
+  }, [jarGlow]);
+
+  /* -------------------------------------------------------
+     FIRESTORE: LOAD AND SYNC HAPPY MOMENTS
+  ------------------------------------------------------- */
+
+  useEffect(() => {
+    let unsubscribeMoments: (() => void) | undefined;
+
+    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+      unsubscribeMoments?.();
+      unsubscribeMoments = undefined;
+
+      // Clear data from any previously signed-in account.
+      setMoments([]);
+      setLoading(true);
+
+      if (!user) {
+        setLoading(false);
+        return;
+      }
+
+      const momentsRef = collection(
+        db,
+        "users",
+        user.uid,
+        "happyJarMoments"
+      );
+
+      const momentsQuery = query(
+        momentsRef,
+        orderBy("createdAt", "desc")
+      );
+
+      unsubscribeMoments = onSnapshot(
+        momentsQuery,
+        (snapshot) => {
+          const loadedMoments: HappyMoment[] = snapshot.docs.map(
+            (momentDoc) => {
+              const data = momentDoc.data();
+
+              return {
+                id: momentDoc.id,
+                text:
+                  typeof data.text === "string"
+                    ? data.text
+                    : "",
+              };
+            }
+          );
+
+          setMoments(loadedMoments);
+          setLoading(false);
+        },
+        (error) => {
+          console.error("HAPPY JAR LOAD ERROR:", error);
+          setLoading(false);
+
+          Alert.alert(
+            "Couldn't load your Happy Jar",
+            "Please check your internet connection and Firestore permissions."
+          );
+        }
+      );
+    });
+
+    return () => {
+      unsubscribeMoments?.();
+      unsubscribeAuth();
+    };
   }, []);
 
   /* -------------------------------------------------------
-     ADD HAPPY MOMENT
+     ADD HAPPY MOMENT TO FIRESTORE
   ------------------------------------------------------- */
 
-  const addMoment = () => {
-    if (!moment.trim()) return;
+  const addMoment = async () => {
+    const text = moment.trim();
 
-    setMoments((previous) => [
-      moment.trim(),
-      ...previous,
-    ]);
+    if (!text || saving) return;
 
-    setMoment("");
+    const user = auth.currentUser;
 
-    /* New heart appears */
+    if (!user) {
+      Alert.alert(
+        "Sign in required",
+        "Please sign in to save your happy moments."
+      );
+      return;
+    }
 
-    newHeartScale.setValue(0.15);
+    setSaving(true);
 
-    Animated.sequence([
-      Animated.spring(newHeartScale, {
-        toValue: 1.3,
-        tension: 75,
-        friction: 5,
-        useNativeDriver: true,
-      }),
+    try {
+      await addDoc(
+        collection(
+          db,
+          "users",
+          user.uid,
+          "happyJarMoments"
+        ),
+        {
+          text,
+          createdAt: serverTimestamp(),
+        }
+      );
 
-      Animated.spring(newHeartScale, {
-        toValue: 1,
-        tension: 45,
-        friction: 6,
-        useNativeDriver: true,
-      }),
-    ]).start();
+      // The Firestore listener updates the jar automatically.
+      setMoment("");
 
-    /* Jar gently reacts */
+      /* New heart appears */
+      newHeartScale.setValue(0.15);
 
-    Animated.sequence([
-      Animated.spring(jarScale, {
-        toValue: 1.05,
-        tension: 90,
-        friction: 5,
-        useNativeDriver: true,
-      }),
+      Animated.sequence([
+        Animated.spring(newHeartScale, {
+          toValue: 1.3,
+          tension: 75,
+          friction: 5,
+          useNativeDriver: true,
+        }),
+        Animated.spring(newHeartScale, {
+          toValue: 1,
+          tension: 45,
+          friction: 6,
+          useNativeDriver: true,
+        }),
+      ]).start();
 
-      Animated.spring(jarScale, {
-        toValue: 1,
-        tension: 50,
-        friction: 7,
-        useNativeDriver: true,
-      }),
-    ]).start();
+      /* Jar gently reacts */
+      Animated.sequence([
+        Animated.spring(jarScale, {
+          toValue: 1.05,
+          tension: 90,
+          friction: 5,
+          useNativeDriver: true,
+        }),
+        Animated.spring(jarScale, {
+          toValue: 1,
+          tension: 50,
+          friction: 7,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    } catch (error) {
+      console.error("HAPPY JAR SAVE ERROR:", error);
+
+      Alert.alert(
+        "Couldn't save your moment",
+        "Please check your connection and Firestore rules. Your text is still in the input box."
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  /* -------------------------------------------------------
+     DELETE HAPPY MOMENT FROM FIRESTORE
+  ------------------------------------------------------- */
+
+  const deleteMoment = (momentId: string) => {
+    const user = auth.currentUser;
+
+    if (!user) {
+      Alert.alert("Sign in required", "Please sign in again.");
+      return;
+    }
+
+    Alert.alert(
+      "Remove this happy moment?",
+      "This memory will be permanently removed from your jar.",
+      [
+        {
+          text: "Keep it",
+          style: "cancel",
+        },
+        {
+          text: "Remove",
+          style: "destructive",
+          onPress: async () => {
+            setDeletingId(momentId);
+
+            try {
+              await deleteDoc(
+                doc(
+                  db,
+                  "users",
+                  user.uid,
+                  "happyJarMoments",
+                  momentId
+                )
+              );
+            } catch (error) {
+              console.error("HAPPY JAR DELETE ERROR:", error);
+
+              Alert.alert(
+                "Couldn't remove the moment",
+                "Please check your connection and try again."
+              );
+            } finally {
+              setDeletingId(null);
+            }
+          },
+        },
+      ]
+    );
   };
 
   /* -------------------------------------------------------
@@ -252,14 +411,12 @@ export default function HappyJar() {
         friction: 4,
         useNativeDriver: true,
       }),
-
       Animated.spring(jarScale, {
         toValue: 0.985,
         tension: 60,
         friction: 5,
         useNativeDriver: true,
       }),
-
       Animated.spring(jarScale, {
         toValue: 1,
         tension: 45,
@@ -273,9 +430,7 @@ export default function HappyJar() {
      GET HEART ANIMATION
   ------------------------------------------------------- */
 
-  const getHeartAnimation = (
-    index: number
-  ) => {
+  const getHeartAnimation = (index: number) => {
     const animations = [
       heartFloatOne,
       heartFloatTwo,
@@ -290,9 +445,7 @@ export default function HappyJar() {
      GET HEART POSITION
   ------------------------------------------------------- */
 
-  const getHeartPosition = (
-    index: number
-  ) => {
+  const getHeartPosition = (index: number) => {
     const positions = [
       { left: 28, top: 32 },
       { left: 73, top: 25 },
@@ -308,18 +461,14 @@ export default function HappyJar() {
       { left: 120, top: 158 },
     ];
 
-    return positions[
-      index % positions.length
-    ];
+    return positions[index % positions.length];
   };
 
   /* -------------------------------------------------------
      GET HEART COLOUR
   ------------------------------------------------------- */
 
-  const getHeartColor = (
-    index: number
-  ) => {
+  const getHeartColor = (index: number) => {
     const colors = [
       C.coral,
       C.teal,
@@ -338,30 +487,20 @@ export default function HappyJar() {
       keyboardShouldPersistTaps="handled"
       showsVerticalScrollIndicator={false}
     >
-      {/* --------------------------------------------------
-          BACK
-      -------------------------------------------------- */}
+      {/* BACK */}
 
       <Pressable
         style={styles.backButton}
         onPress={() => router.back()}
       >
-        <Text style={styles.backText}>
-          ← Back
-        </Text>
+        <Text style={styles.backText}>← Back</Text>
       </Pressable>
 
-      {/* --------------------------------------------------
-          HEADER
-      -------------------------------------------------- */}
+      {/* HEADER */}
 
-      <Text style={styles.label}>
-        A LITTLE HAPPINESS
-      </Text>
+      <Text style={styles.label}>A LITTLE HAPPINESS</Text>
 
-      <Text style={styles.title}>
-        Your Happy Jar
-      </Text>
+      <Text style={styles.title}>Your Happy Jar</Text>
 
       <Text style={styles.subtitle}>
         Save the tiny moments that made you smile.
@@ -369,25 +508,13 @@ export default function HappyJar() {
         little light.
       </Text>
 
-      {/* --------------------------------------------------
-          JAR
-      -------------------------------------------------- */}
+      {/* JAR */}
 
       <View style={styles.jarArea}>
-
-        {/* Decorative sparkle */}
-
         <Animated.Text
           style={[
             styles.sparkleOne,
-            {
-              transform: [
-                {
-                  translateY:
-                    heartFloatOne,
-                },
-              ],
-            },
+            { transform: [{ translateY: heartFloatOne }] },
           ]}
         >
           ✦
@@ -396,14 +523,7 @@ export default function HappyJar() {
         <Animated.Text
           style={[
             styles.sparkleTwo,
-            {
-              transform: [
-                {
-                  translateY:
-                    heartFloatTwo,
-                },
-              ],
-            },
+            { transform: [{ translateY: heartFloatTwo }] },
           ]}
         >
           ·
@@ -412,140 +532,85 @@ export default function HappyJar() {
         <Animated.Text
           style={[
             styles.sparkleThree,
-            {
-              transform: [
-                {
-                  translateY:
-                    heartFloatThree,
-                },
-              ],
-            },
+            { transform: [{ translateY: heartFloatThree }] },
           ]}
         >
           ✦
         </Animated.Text>
 
-        {/* Jar */}
-
-        <Pressable
-          onPress={handleJarPress}
-        >
+        <Pressable onPress={handleJarPress}>
           <Animated.View
             style={[
               styles.jarWrapper,
               {
                 transform: [
-                  {
-                    translateY: jarFloat,
-                  },
-                  {
-                    scale: jarScale,
-                  },
+                  { translateY: jarFloat },
+                  { scale: jarScale },
                 ],
               },
             ]}
           >
-            {/* Lid */}
-
             <View style={styles.jarLid} />
-
-            {/* Jar body */}
 
             <View style={styles.jar}>
               <Animated.View
                 style={[
                   styles.jarGlass,
                   {
-                    borderColor:
-                      jarGlow.interpolate({
-                        inputRange: [0, 1],
-                        outputRange: [
-                          "#D7E9E5",
-                          "#FFDA57",
-                        ],
-                      }),
+                    borderColor: jarGlow.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: ["#D7E9E5", "#FFDA57"],
+                    }),
                   },
                 ]}
               >
+                {moments.map((item, index) => {
+                  const position = getHeartPosition(index);
+                  const animation = getHeartAnimation(index);
 
-                {/* ------------------------------------
-                    ONE HEART = ONE MEMORY
-                ------------------------------------ */}
-
-                {moments.map(
-                  (_, index) => {
-                    const position =
-                      getHeartPosition(index);
-
-                    const animation =
-                      getHeartAnimation(index);
-
-                    return (
-                      <Animated.Text
-                        key={index}
-                        style={[
-                          styles.jarHeart,
-                          {
-                            left:
-                              position.left,
-                            top:
-                              position.top,
-                            color:
-                              getHeartColor(
-                                index
-                              ),
-
-                            transform: [
-                              {
-                                translateY:
-                                  animation,
-                              },
-                              {
-                                rotate:
-                                  index % 2 ===
-                                  0
-                                    ? "-8deg"
-                                    : "8deg",
-                              },
-                              {
-                                scale:
-                                  index === 0
-                                    ? newHeartScale
-                                    : 1,
-                              },
-                            ],
-                          },
-                        ]}
-                      >
-                        ♥
-                      </Animated.Text>
-                    );
-                  }
-                )}
-
-                {/* Empty jar message */}
-
-                {moments.length === 0 && (
-                  <View
-                    style={
-                      styles.emptyJarContent
-                    }
-                  >
-                    <Text
-                      style={
-                        styles.emptyJarHeart
-                      }
+                  return (
+                    <Animated.Text
+                      key={item.id}
+                      style={[
+                        styles.jarHeart,
+                        {
+                          left: position.left,
+                          top: position.top,
+                          color: getHeartColor(index),
+                          transform: [
+                            { translateY: animation },
+                            {
+                              rotate:
+                                index % 2 === 0 ? "-8deg" : "8deg",
+                            },
+                            {
+                              scale:
+                                index === 0 ? newHeartScale : 1,
+                            },
+                          ],
+                        },
+                      ]}
                     >
-                      ♡
-                    </Text>
+                      ♥
+                    </Animated.Text>
+                  );
+                })}
 
-                    <Text
-                      style={
-                        styles.emptyJarText
-                      }
-                    >
+                {!loading && moments.length === 0 && (
+                  <View style={styles.emptyJarContent}>
+                    <Text style={styles.emptyJarHeart}>♡</Text>
+                    <Text style={styles.emptyJarText}>
                       Your first little{"\n"}
                       happiness goes here
+                    </Text>
+                  </View>
+                )}
+
+                {loading && (
+                  <View style={styles.emptyJarContent}>
+                    <ActivityIndicator color={C.deepTeal} />
+                    <Text style={styles.emptyJarText}>
+                      Opening your jar...
                     </Text>
                   </View>
                 )}
@@ -554,19 +619,20 @@ export default function HappyJar() {
           </Animated.View>
         </Pressable>
 
-        <Text style={styles.tapHint}>
-          Tap your jar ♡
-        </Text>
+        <Text style={styles.tapHint}>Tap your jar ♡</Text>
+
+        {moments.length > 0 && (
+          <Text style={styles.memoryCount}>
+            {moments.length}{" "}
+            {moments.length === 1 ? "little memory" : "little memories"}
+          </Text>
+        )}
       </View>
 
-      {/* --------------------------------------------------
-          ADD MOMENT
-      -------------------------------------------------- */}
+      {/* ADD MOMENT */}
 
       <View style={styles.card}>
-        <Text style={styles.cardLabel}>
-          KEEP A LITTLE MEMORY
-        </Text>
+        <Text style={styles.cardLabel}>KEEP A LITTLE MEMORY</Text>
 
         <Text style={styles.cardTitle}>
           What made you smile today?
@@ -578,104 +644,101 @@ export default function HappyJar() {
           placeholder="My happy moment was..."
           placeholderTextColor="#9AAFAE"
           multiline
+          maxLength={500}
+          textAlignVertical="top"
           style={styles.input}
         />
+
+        <Text style={styles.characterCount}>
+          {moment.length}/500
+        </Text>
 
         <Pressable
           style={({ pressed }) => [
             styles.button,
-            !moment.trim() &&
-              styles.disabled,
-            pressed &&
-              moment.trim() &&
-              styles.buttonPressed,
+            (!moment.trim() || saving) && styles.disabled,
+            pressed && moment.trim() && styles.buttonPressed,
           ]}
           onPress={addMoment}
-          disabled={!moment.trim()}
+          disabled={!moment.trim() || saving}
         >
-          <Text style={styles.buttonText}>
-            Add to My Jar
-          </Text>
-
-          <View style={styles.buttonHeart}>
-            <Text
-              style={
-                styles.buttonHeartText
-              }
-            >
-              ♡
-            </Text>
-          </View>
+          {saving ? (
+            <View style={styles.savingRow}>
+              <ActivityIndicator color={C.white} size="small" />
+              <Text style={styles.buttonText}>Saving your moment...</Text>
+            </View>
+          ) : (
+            <>
+              <Text style={styles.buttonText}>Add to My Jar</Text>
+              <View style={styles.buttonHeart}>
+                <Text style={styles.buttonHeartText}>♡</Text>
+              </View>
+            </>
+          )}
         </Pressable>
       </View>
 
-      {/* --------------------------------------------------
-          SAVED MOMENTS
-      -------------------------------------------------- */}
+      {/* SAVED MOMENTS */}
 
-      {moments.length > 0 && (
-        <View
-          style={styles.momentsSection}
-        >
-          <Text style={styles.sectionLabel}>
-            YOUR LITTLE HAPPINESS
-          </Text>
+      <View style={styles.momentsSection}>
+        <Text style={styles.sectionLabel}>YOUR LITTLE HAPPINESS</Text>
 
-          <Text style={styles.sectionTitle}>
-            Moments worth keeping.
-          </Text>
+        <Text style={styles.sectionTitle}>
+          Moments worth keeping.
+        </Text>
 
-          {moments.map(
-            (item, index) => (
-              <View
-                key={index}
-                style={styles.momentCard}
-              >
-                <View
-                  style={
-                    styles.momentIcon
-                  }
-                >
-                  <Text
-                    style={
-                      styles.momentHeart
-                    }
-                  >
-                    ♥
-                  </Text>
-                </View>
-
+        {loading ? (
+          <View style={styles.statusCard}>
+            <ActivityIndicator color={C.deepTeal} />
+            <Text style={styles.statusText}>
+              Finding your happy moments...
+            </Text>
+          </View>
+        ) : moments.length > 0 ? (
+          moments.map((item, index) => (
+            <View key={item.id} style={styles.momentCard}>
+              <View style={styles.momentIcon}>
                 <Text
-                  style={
-                    styles.momentText
-                  }
+                  style={[
+                    styles.momentHeart,
+                    { color: getHeartColor(index) },
+                  ]}
                 >
-                  {item}
+                  ♥
                 </Text>
               </View>
-            )
-          )}
-        </View>
-      )}
 
-      {/* --------------------------------------------------
-          EMPTY STATE
-      -------------------------------------------------- */}
+              <Text style={styles.momentText}>{item.text}</Text>
 
-      {moments.length === 0 && (
-        <View
-          style={styles.emptyContainer}
-        >
-          <Text style={styles.emptyHeart}>
-            ♡
-          </Text>
+              <Pressable
+                style={styles.deleteButton}
+                onPress={() => deleteMoment(item.id)}
+                disabled={deletingId === item.id}
+                accessibilityLabel="Delete happy moment"
+                hitSlop={8}
+              >
+                {deletingId === item.id ? (
+                  <ActivityIndicator size="small" color={C.coral} />
+                ) : (
+                  <Text style={styles.deleteText}>×</Text>
+                )}
+              </Pressable>
+            </View>
+          ))
+        ) : (
+          <View style={styles.emptyContainer}>
+            <Text style={styles.emptyHeart}>♡</Text>
 
-          <Text style={styles.emptyText}>
-            Your jar is waiting for its first
-            little happy moment.
-          </Text>
-        </View>
-      )}
+            <Text style={styles.emptyText}>
+              Your jar is waiting for its first little happy moment.
+            </Text>
+
+            <Text style={styles.emptyHint}>
+              Even a tiny win is worth keeping.
+            </Text>
+          </View>
+        )}
+      </View>
     </ScrollView>
   );
 }
@@ -685,10 +748,6 @@ export default function HappyJar() {
 ------------------------------------------------------- */
 
 const styles = StyleSheet.create({
-  /* -------------------------------------------------------
-     PAGE
-  ------------------------------------------------------- */
-
   container: {
     flex: 1,
     backgroundColor: C.cream,
@@ -698,10 +757,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 22,
     paddingBottom: 60,
   },
-
-  /* -------------------------------------------------------
-     BACK
-  ------------------------------------------------------- */
 
   backButton: {
     marginTop: 45,
@@ -714,10 +769,6 @@ const styles = StyleSheet.create({
     color: C.deepTeal,
     fontWeight: "800",
   },
-
-  /* -------------------------------------------------------
-     HEADER
-  ------------------------------------------------------- */
 
   label: {
     fontSize: 10,
@@ -742,12 +793,8 @@ const styles = StyleSheet.create({
     maxWidth: 360,
   },
 
-  /* -------------------------------------------------------
-     JAR AREA
-  ------------------------------------------------------- */
-
   jarArea: {
-    height: 330,
+    minHeight: 350,
     alignItems: "center",
     justifyContent: "center",
     marginTop: 4,
@@ -764,15 +811,10 @@ const styles = StyleSheet.create({
     backgroundColor: C.deepTeal,
     marginBottom: -5,
     zIndex: 2,
-
     shadowColor: C.deepTeal,
     shadowOpacity: 0.15,
     shadowRadius: 7,
-    shadowOffset: {
-      width: 0,
-      height: 3,
-    },
-
+    shadowOffset: { width: 0, height: 3 },
     elevation: 3,
   },
 
@@ -782,15 +824,10 @@ const styles = StyleSheet.create({
     borderRadius: 35,
     backgroundColor: "#DFF1EE",
     padding: 10,
-
     shadowColor: C.deepTeal,
     shadowOpacity: 0.13,
     shadowRadius: 20,
-    shadowOffset: {
-      width: 0,
-      height: 10,
-    },
-
+    shadowOffset: { width: 0, height: 10 },
     elevation: 7,
   },
 
@@ -805,23 +842,16 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
 
-  /* -------------------------------------------------------
-     ACTUAL MEMORY HEARTS
-  ------------------------------------------------------- */
-
   jarHeart: {
     position: "absolute",
     fontSize: 25,
     fontWeight: "900",
   },
 
-  /* -------------------------------------------------------
-     EMPTY JAR
-  ------------------------------------------------------- */
-
   emptyJarContent: {
     alignItems: "center",
     justifyContent: "center",
+    paddingHorizontal: 5,
   },
 
   emptyJarHeart: {
@@ -837,11 +867,8 @@ const styles = StyleSheet.create({
     fontSize: 11,
     lineHeight: 17,
     fontWeight: "600",
+    marginTop: 7,
   },
-
-  /* -------------------------------------------------------
-     SPARKLES
-  ------------------------------------------------------- */
 
   sparkleOne: {
     position: "absolute",
@@ -877,23 +904,21 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
 
-  /* -------------------------------------------------------
-     INPUT CARD
-  ------------------------------------------------------- */
+  memoryCount: {
+    fontSize: 11,
+    color: C.deepTeal,
+    fontWeight: "700",
+    marginTop: 5,
+  },
 
   card: {
     backgroundColor: C.white,
     borderRadius: 28,
     padding: 21,
-
     shadowColor: C.dark,
     shadowOpacity: 0.06,
     shadowRadius: 14,
-    shadowOffset: {
-      width: 0,
-      height: 6,
-    },
-
+    shadowOffset: { width: 0, height: 6 },
     elevation: 3,
   },
 
@@ -916,7 +941,6 @@ const styles = StyleSheet.create({
     marginTop: 15,
     fontSize: 15,
     color: C.dark,
-    textAlignVertical: "top",
     backgroundColor: C.cream,
     borderRadius: 17,
     padding: 15,
@@ -924,9 +948,12 @@ const styles = StyleSheet.create({
     borderColor: "#E6EFEB",
   },
 
-  /* -------------------------------------------------------
-     BUTTON
-  ------------------------------------------------------- */
+  characterCount: {
+    fontSize: 10,
+    color: C.muted,
+    textAlign: "right",
+    marginTop: 5,
+  },
 
   button: {
     minHeight: 52,
@@ -938,15 +965,10 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     flexDirection: "row",
     marginTop: 15,
-
     shadowColor: C.deepTeal,
     shadowOpacity: 0.15,
     shadowRadius: 10,
-    shadowOffset: {
-      width: 0,
-      height: 5,
-    },
-
+    shadowOffset: { width: 0, height: 5 },
     elevation: 4,
   },
 
@@ -971,17 +993,21 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
 
+  savingRow: {
+    flex: 1,
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 10,
+  },
+
   disabled: {
-    opacity: 0.35,
+    opacity: 0.45,
   },
 
   buttonPressed: {
     transform: [{ scale: 0.97 }],
   },
-
-  /* -------------------------------------------------------
-     SAVED MOMENTS
-  ------------------------------------------------------- */
 
   momentsSection: {
     marginTop: 32,
@@ -1006,7 +1032,6 @@ const styles = StyleSheet.create({
     backgroundColor: C.paleTeal,
     borderRadius: 21,
     padding: 14,
-    paddingRight: 17,
     flexDirection: "row",
     alignItems: "center",
     marginBottom: 11,
@@ -1036,14 +1061,38 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
 
-  /* -------------------------------------------------------
-     EMPTY STATE
-  ------------------------------------------------------- */
+  deleteButton: {
+    width: 30,
+    height: 36,
+    alignItems: "center",
+    justifyContent: "center",
+    marginLeft: 8,
+  },
+
+  deleteText: {
+    fontSize: 25,
+    color: C.coral,
+    fontWeight: "500",
+  },
+
+  statusCard: {
+    backgroundColor: C.white,
+    borderRadius: 20,
+    padding: 24,
+    alignItems: "center",
+  },
+
+  statusText: {
+    marginTop: 10,
+    fontSize: 12,
+    color: C.muted,
+  },
 
   emptyContainer: {
     alignItems: "center",
-    marginTop: 27,
-    paddingHorizontal: 25,
+    backgroundColor: C.paleTeal,
+    borderRadius: 22,
+    padding: 25,
   },
 
   emptyHeart: {
@@ -1057,5 +1106,13 @@ const styles = StyleSheet.create({
     color: C.muted,
     fontSize: 13,
     lineHeight: 20,
+  },
+
+  emptyHint: {
+    textAlign: "center",
+    color: C.deepTeal,
+    fontSize: 11,
+    fontWeight: "700",
+    marginTop: 8,
   },
 });

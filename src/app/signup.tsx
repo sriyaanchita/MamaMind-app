@@ -2,6 +2,13 @@ import {
   useRouter,
   useLocalSearchParams,
 } from "expo-router";
+import { registerUser } from "../services/auth";
+import { db } from "../services/firebase";
+import {
+  doc,
+  setDoc,
+  serverTimestamp,
+} from "firebase/firestore";
 import { useEffect, useRef, useState } from "react";
 import {
   Animated,
@@ -209,30 +216,79 @@ export default function SignupScreen() {
      SIGN UP
   ======================================================= */
 
-  const handleSignup = () => {
-    setError("");
+  const handleSignup = async () => {
+  setError("");
 
-    if (!name.trim()) {
-      setError("Tell us your name first. We'd love to know what to call you. 🌷");
-      return;
-    }
+  if (!name.trim()) {
+    setError(
+      "Tell us your name first. We'd love to know what to call you. 🌷"
+    );
+    return;
+  }
 
-    if (!email.trim() || !email.includes("@")) {
-      setError("Let's check that email address once more. 💛");
-      return;
-    }
+  if (!email.trim() || !email.includes("@")) {
+    setError("Let's check that email address once more. 💛");
+    return;
+  }
 
-    if (password.length < 6) {
-      setError("Your password needs at least 6 characters.");
-      return;
-    }
+  if (password.length < 6) {
+    setError("Your password needs at least 6 characters.");
+    return;
+  }
 
-    // Connect Supabase sign-up here later.
+  try {
+    const user = await registerUser(
+      email.trim(),
+      password
+    );
+
+    // Store the user's profile in Firestore
+    await setDoc(doc(db, "users", user.uid), {
+      name: name.trim(),
+      email: email.trim().toLowerCase(),
+      babyName: babyName.trim(),
+      role: role,
+      createdAt: serverTimestamp(),
+    });
+
+    // Go to the correct dashboard
     if (role === "mother") {
-       router.replace("/mother-dashboard");}
-    else if (role === "father") {
-       router.replace("/father-dashboard");}
-  };
+      router.replace("/mother-dashboard");
+    } else if (role === "father") {
+      router.replace("/father-dashboard");
+    }
+  } catch (error: any) {
+    console.log(
+      "SIGNUP ERROR:",
+      error?.code,
+      error?.message
+    );
+
+    if (error?.code === "auth/email-already-in-use") {
+      setError(
+        "An account with this email already exists. Please log in."
+      );
+    } else if (error?.code === "auth/invalid-email") {
+      setError("Please enter a valid email address.");
+    } else if (error?.code === "auth/weak-password") {
+      setError("Your password needs at least 6 characters.");
+    } else if (
+      error?.code === "auth/network-request-failed"
+    ) {
+      setError(
+        "Please check your internet connection and try again."
+      );
+    } else if (error?.code === "permission-denied") {
+      setError(
+        "Account created, but your profile could not be saved."
+      );
+    } else {
+      setError(
+        "Unable to create your account. Please try again."
+      );
+    }
+  }
+};
 
   const floatingStyle = (item: FloatItem) => ({
     transform: [

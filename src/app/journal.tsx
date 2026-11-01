@@ -1,3 +1,4 @@
+
 import React, { useEffect, useRef, useState } from "react";
 import {
   View,
@@ -11,8 +12,23 @@ import {
   Animated,
   Easing,
   Dimensions,
+  Alert,
+  ActivityIndicator,
 } from "react-native";
 import { router } from "expo-router";
+import { onAuthStateChanged } from "firebase/auth";
+import {
+  addDoc,
+  collection,
+  deleteDoc,
+  doc,
+  onSnapshot,
+  orderBy,
+  query,
+  serverTimestamp,
+} from "firebase/firestore";
+
+import { auth, db } from "../services/firebase";
 
 const { width, height } = Dimensions.get("window");
 
@@ -28,63 +44,21 @@ const C = {
   muted: "#648384",
 } as const;
 
+type JournalEntry = {
+  id: string;
+  text: string;
+  mood: string;
+};
+
 const floatingDefinitions = [
-  {
-    type: "bubble",
-    left: 0.04,
-    top: 0.12,
-    size: 42,
-    color: C.yellow,
-  },
-  {
-    type: "dot",
-    left: 0.89,
-    top: 0.08,
-    size: 16,
-    color: C.coral,
-  },
-  {
-    type: "heart",
-    left: 0.07,
-    top: 0.34,
-    size: 31,
-    color: C.teal,
-  },
-  {
-    type: "ring",
-    left: 0.91,
-    top: 0.31,
-    size: 32,
-    color: C.yellow,
-  },
-  {
-    type: "star",
-    left: 0.04,
-    top: 0.57,
-    size: 29,
-    color: C.coral,
-  },
-  {
-    type: "bubble",
-    left: 0.91,
-    top: 0.55,
-    size: 44,
-    color: C.teal,
-  },
-  {
-    type: "dot",
-    left: 0.15,
-    top: 0.75,
-    size: 13,
-    color: C.yellow,
-  },
-  {
-    type: "ring",
-    left: 0.83,
-    top: 0.78,
-    size: 24,
-    color: C.coral,
-  },
+  { type: "bubble", left: 0.04, top: 0.12, size: 42, color: C.yellow },
+  { type: "dot", left: 0.89, top: 0.08, size: 16, color: C.coral },
+  { type: "heart", left: 0.07, top: 0.34, size: 31, color: C.teal },
+  { type: "ring", left: 0.91, top: 0.31, size: 32, color: C.yellow },
+  { type: "star", left: 0.04, top: 0.57, size: 29, color: C.coral },
+  { type: "bubble", left: 0.91, top: 0.55, size: 44, color: C.teal },
+  { type: "dot", left: 0.15, top: 0.75, size: 13, color: C.yellow },
+  { type: "ring", left: 0.83, top: 0.78, size: 24, color: C.coral },
 ];
 
 function FloatingShape({
@@ -118,7 +92,7 @@ function FloatingShape({
     ],
   };
 
-  if (item.type === "bubble") {
+  if (item.type === "bubble" || item.type === "dot") {
     return (
       <Animated.View
         style={[
@@ -126,22 +100,7 @@ function FloatingShape({
           {
             borderRadius: item.size / 2,
             backgroundColor: item.color,
-            opacity: 0.2,
-          },
-        ]}
-      />
-    );
-  }
-
-  if (item.type === "dot") {
-    return (
-      <Animated.View
-        style={[
-          shapeStyle,
-          {
-            borderRadius: item.size / 2,
-            backgroundColor: item.color,
-            opacity: 0.38,
+            opacity: item.type === "bubble" ? 0.2 : 0.38,
           },
         ]}
       />
@@ -164,22 +123,6 @@ function FloatingShape({
     );
   }
 
-  if (item.type === "heart") {
-    return (
-      <Animated.View style={shapeStyle}>
-        <Text
-          style={{
-            fontSize: item.size,
-            color: item.color,
-            opacity: 0.28,
-          }}
-        >
-          ♡
-        </Text>
-      </Animated.View>
-    );
-  }
-
   return (
     <Animated.View style={shapeStyle}>
       <Text
@@ -189,7 +132,7 @@ function FloatingShape({
           opacity: 0.28,
         }}
       >
-        ✦
+        {item.type === "heart" ? "♡" : "✦"}
       </Text>
     </Animated.View>
   );
@@ -197,13 +140,13 @@ function FloatingShape({
 
 export default function Journal() {
   const [entry, setEntry] = useState("");
-  const [entries, setEntries] = useState<
-    { text: string; mood: string }[]
-  >([]);
+  const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [selectedMood, setSelectedMood] = useState<string | null>(null);
   const [selectedPrompt, setSelectedPrompt] = useState<string | null>(null);
-  const [expandedEntry, setExpandedEntry] = useState<number | null>(null);
+  const [expandedEntry, setExpandedEntry] = useState<string | null>(null);
   const [savedMessage, setSavedMessage] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
   const floatingItems = useRef(
     floatingDefinitions.map(() => ({
@@ -215,6 +158,7 @@ export default function Journal() {
   ).current;
 
   const saveButtonScale = useRef(new Animated.Value(1)).current;
+
   const promptScales = useRef(
     Array.from({ length: 4 }, () => new Animated.Value(1))
   ).current;
@@ -243,8 +187,8 @@ export default function Journal() {
 
   useEffect(() => {
     let cancelled = false;
-
     const timers: ReturnType<typeof setTimeout>[] = [];
+    const runningAnimations: Animated.CompositeAnimation[] = [];
 
     floatingItems.forEach((item, index) => {
       const move = () => {
@@ -252,9 +196,7 @@ export default function Journal() {
 
         const xDistance = (Math.random() - 0.5) * 75;
         const yDistance = (Math.random() - 0.5) * 70;
-
         const duration = 6500 + Math.random() * 2600;
-
         const rotateTarget = Math.random() > 0.5 ? 1 : -1;
 
         const animation = Animated.parallel([
@@ -264,14 +206,12 @@ export default function Journal() {
             easing: Easing.inOut(Easing.sin),
             useNativeDriver: true,
           }),
-
           Animated.timing(item.y, {
             toValue: yDistance,
             duration,
             easing: Easing.inOut(Easing.sin),
             useNativeDriver: true,
           }),
-
           Animated.sequence([
             Animated.timing(item.scale, {
               toValue: 1.045,
@@ -279,7 +219,6 @@ export default function Journal() {
               easing: Easing.inOut(Easing.sin),
               useNativeDriver: true,
             }),
-
             Animated.timing(item.scale, {
               toValue: 1,
               duration: duration / 2,
@@ -287,7 +226,6 @@ export default function Journal() {
               useNativeDriver: true,
             }),
           ]),
-
           Animated.sequence([
             Animated.timing(item.rotate, {
               toValue: rotateTarget,
@@ -295,7 +233,6 @@ export default function Journal() {
               easing: Easing.inOut(Easing.sin),
               useNativeDriver: true,
             }),
-
             Animated.timing(item.rotate, {
               toValue: 0,
               duration: duration / 2,
@@ -305,6 +242,8 @@ export default function Journal() {
           ]),
         ]);
 
+        runningAnimations.push(animation);
+
         animation.start(({ finished }) => {
           if (finished && !cancelled) {
             move();
@@ -312,14 +251,13 @@ export default function Journal() {
         });
       };
 
-      const timer = setTimeout(() => move(), index * 220);
-      timers.push(timer);
+      timers.push(setTimeout(move, index * 220));
     });
 
     return () => {
       cancelled = true;
-
-      timers.forEach((timer) => clearTimeout(timer));
+      timers.forEach(clearTimeout);
+      runningAnimations.forEach((animation) => animation.stop());
 
       floatingItems.forEach((item) => {
         item.x.stopAnimation();
@@ -329,6 +267,73 @@ export default function Journal() {
       });
     };
   }, [floatingItems]);
+
+  /* ---------------- FIRESTORE LOAD + LIVE SYNC ---------------- */
+
+  useEffect(() => {
+    let unsubscribeEntries: (() => void) | undefined;
+
+    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+      unsubscribeEntries?.();
+      unsubscribeEntries = undefined;
+
+      // Clear previous account's entries before loading the new account.
+      setEntries([]);
+      setExpandedEntry(null);
+      setLoading(true);
+
+      if (!user) {
+        setLoading(false);
+        return;
+      }
+
+      const entriesRef = collection(
+        db,
+        "users",
+        user.uid,
+        "journalEntries"
+      );
+
+      const entriesQuery = query(
+        entriesRef,
+        orderBy("createdAt", "desc")
+      );
+
+      unsubscribeEntries = onSnapshot(
+        entriesQuery,
+        (snapshot) => {
+          const loadedEntries: JournalEntry[] = snapshot.docs.map(
+            (entryDoc) => {
+              const data = entryDoc.data();
+
+              return {
+                id: entryDoc.id,
+                text: typeof data.text === "string" ? data.text : "",
+                mood: typeof data.mood === "string" ? data.mood : "A moment",
+              };
+            }
+          );
+
+          setEntries(loadedEntries);
+          setLoading(false);
+        },
+        (error) => {
+          console.error("JOURNAL LOAD ERROR:", error);
+          setLoading(false);
+
+          Alert.alert(
+            "Unable to load journal",
+            "Please check your internet connection and Firestore permissions."
+          );
+        }
+      );
+    });
+
+    return () => {
+      unsubscribeEntries?.();
+      unsubscribeAuth();
+    };
+  }, []);
 
   /* ---------------- SAVE MESSAGE ANIMATION ---------------- */
 
@@ -344,30 +349,55 @@ export default function Journal() {
       useNativeDriver: true,
     }).start();
 
-    const timer = setTimeout(() => {
-      setSavedMessage(false);
-    }, 2200);
+    const timer = setTimeout(() => setSavedMessage(false), 2200);
 
     return () => clearTimeout(timer);
   }, [savedMessage, savedMessageAnimation]);
 
   /* ---------------- SAVE ENTRY ---------------- */
 
-  const saveEntry = () => {
-    if (!entry.trim()) return;
+  const saveEntry = async () => {
+    const text = entry.trim();
 
-    setEntries((previous) => [
-      {
-        text: entry.trim(),
-        mood: selectedMood || "A moment",
-      },
-      ...previous,
-    ]);
+    if (!text || saving) return;
 
-    setEntry("");
-    setSelectedMood(null);
-    setSelectedPrompt(null);
-    setSavedMessage(true);
+    const user = auth.currentUser;
+
+    if (!user) {
+      Alert.alert(
+        "Sign in required",
+        "Please sign in to save your journal entries."
+      );
+      return;
+    }
+
+    setSaving(true);
+
+    try {
+      await addDoc(
+        collection(db, "users", user.uid, "journalEntries"),
+        {
+          text,
+          mood: selectedMood || "A moment",
+          createdAt: serverTimestamp(),
+        }
+      );
+
+      // The Firestore listener updates the list automatically.
+      setEntry("");
+      setSelectedMood(null);
+      setSelectedPrompt(null);
+      setSavedMessage(true);
+    } catch (error) {
+      console.error("JOURNAL SAVE ERROR:", error);
+
+      Alert.alert(
+        "Couldn't save your moment",
+        "Please check your connection and Firestore rules. Your text is still in the writing area."
+      );
+    } finally {
+      setSaving(false);
+    }
   };
 
   /* ---------------- BUTTON PRESS ---------------- */
@@ -400,7 +430,6 @@ export default function Journal() {
         tension: 100,
         useNativeDriver: true,
       }),
-
       Animated.spring(promptScales[index], {
         toValue: 1,
         friction: 6,
@@ -426,7 +455,6 @@ export default function Journal() {
         tension: 100,
         useNativeDriver: true,
       }),
-
       Animated.spring(moodScales[index], {
         toValue: 1,
         friction: 6,
@@ -440,14 +468,49 @@ export default function Journal() {
 
   /* ---------------- DELETE ENTRY ---------------- */
 
-  const deleteEntry = (index: number) => {
-    setEntries((previous) =>
-      previous.filter((_, itemIndex) => itemIndex !== index)
-    );
+  const deleteEntry = (entryId: string) => {
+    const user = auth.currentUser;
 
-    if (expandedEntry === index) {
-      setExpandedEntry(null);
+    if (!user) {
+      Alert.alert("Sign in required", "Please sign in again.");
+      return;
     }
+
+    Alert.alert(
+      "Delete this moment?",
+      "This journal entry will be permanently deleted.",
+      [
+        { text: "Keep it", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await deleteDoc(
+                doc(
+                  db,
+                  "users",
+                  user.uid,
+                  "journalEntries",
+                  entryId
+                )
+              );
+
+              if (expandedEntry === entryId) {
+                setExpandedEntry(null);
+              }
+            } catch (error) {
+              console.error("JOURNAL DELETE ERROR:", error);
+
+              Alert.alert(
+                "Couldn't delete entry",
+                "Please check your connection and try again."
+              );
+            }
+          },
+        },
+      ]
+    );
   };
 
   return (
@@ -455,7 +518,7 @@ export default function Journal() {
       style={styles.container}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
-      {/* Floating layer */}
+      {/* Floating decorative layer */}
 
       <View pointerEvents="none" style={styles.floatingLayer}>
         {floatingDefinitions.map((item, index) => (
@@ -490,7 +553,7 @@ export default function Journal() {
           is on your mind, even if it is just one sentence.
         </Text>
 
-        {/* Mood */}
+        {/* Mood selection */}
 
         <View style={styles.moodSection}>
           <Text style={styles.moodTitle}>How are you feeling?</Text>
@@ -502,9 +565,7 @@ export default function Journal() {
               return (
                 <Animated.View
                   key={mood.label}
-                  style={{
-                    transform: [{ scale: moodScales[index] }],
-                  }}
+                  style={{ transform: [{ scale: moodScales[index] }] }}
                 >
                   <TouchableOpacity
                     activeOpacity={0.85}
@@ -559,9 +620,7 @@ export default function Journal() {
               This moment is just for you.
             </Text>
 
-            <Text style={styles.counter}>
-              {entry.length}/1000
-            </Text>
+            <Text style={styles.counter}>{entry.length}/1000</Text>
           </View>
         </View>
 
@@ -580,24 +639,20 @@ export default function Journal() {
             {prompts.map((prompt, index) => (
               <Animated.View
                 key={prompt}
-                style={{
-                  transform: [{ scale: promptScales[index] }],
-                }}
+                style={{ transform: [{ scale: promptScales[index] }] }}
               >
                 <TouchableOpacity
                   activeOpacity={0.85}
                   style={[
                     styles.promptChip,
-                    selectedPrompt === prompt &&
-                      styles.promptChipSelected,
+                    selectedPrompt === prompt && styles.promptChipSelected,
                   ]}
                   onPress={() => handlePromptPress(prompt, index)}
                 >
                   <Text
                     style={[
                       styles.promptText,
-                      selectedPrompt === prompt &&
-                        styles.promptTextSelected,
+                      selectedPrompt === prompt && styles.promptTextSelected,
                     ]}
                   >
                     {prompt}
@@ -608,29 +663,28 @@ export default function Journal() {
           </ScrollView>
         </View>
 
-        {/* Save */}
+        {/* Save button */}
 
-        <Animated.View
-          style={{
-            transform: [{ scale: saveButtonScale }],
-          }}
-        >
+        <Animated.View style={{ transform: [{ scale: saveButtonScale }] }}>
           <TouchableOpacity
             style={[
               styles.saveButton,
-              !entry.trim() && styles.disabledButton,
+              (!entry.trim() || saving) && styles.disabledButton,
             ]}
             onPress={saveEntry}
-            disabled={!entry.trim()}
+            disabled={!entry.trim() || saving}
             onPressIn={handleSavePressIn}
             onPressOut={handleSavePressOut}
             activeOpacity={0.9}
           >
-            <Text style={styles.saveText}>
-              Save This Moment
-            </Text>
-
-            <Text style={styles.saveArrow}>→</Text>
+            {saving ? (
+              <ActivityIndicator color={C.white} />
+            ) : (
+              <>
+                <Text style={styles.saveText}>Save This Moment</Text>
+                <Text style={styles.saveArrow}>→</Text>
+              </>
+            )}
           </TouchableOpacity>
         </Animated.View>
 
@@ -654,7 +708,6 @@ export default function Journal() {
             ]}
           >
             <Text style={styles.savedMessageSymbol}>✓</Text>
-
             <Text style={styles.savedMessageText}>
               Your moment has been saved.
             </Text>
@@ -663,38 +716,38 @@ export default function Journal() {
 
         {/* Saved entries */}
 
-        {entries.length > 0 && (
-          <View style={styles.savedSection}>
-            <View style={styles.sectionHeader}>
-              <View>
-                <Text style={styles.sectionTitle}>
-                  Your Moments
-                </Text>
-
-                <Text style={styles.sectionSubtitle}>
-                  Little pieces of your journey.
-                </Text>
-              </View>
-
-              <View style={styles.countBadge}>
-                <Text style={styles.countText}>
-                  {entries.length}
-                </Text>
-              </View>
+        <View style={styles.savedSection}>
+          <View style={styles.sectionHeader}>
+            <View>
+              <Text style={styles.sectionTitle}>Your Moments</Text>
+              <Text style={styles.sectionSubtitle}>
+                Little pieces of your journey.
+              </Text>
             </View>
 
-            {entries.map((item, index) => {
-              const expanded = expandedEntry === index;
+            <View style={styles.countBadge}>
+              <Text style={styles.countText}>{entries.length}</Text>
+            </View>
+          </View>
+
+          {loading ? (
+            <View style={styles.loadingState}>
+              <ActivityIndicator size="small" color={C.deepTeal} />
+              <Text style={styles.loadingText}>
+                Loading your moments...
+              </Text>
+            </View>
+          ) : entries.length > 0 ? (
+            entries.map((item, index) => {
+              const expanded = expandedEntry === item.id;
 
               return (
                 <TouchableOpacity
-                  key={index}
+                  key={item.id}
                   activeOpacity={0.9}
                   style={styles.entryCard}
                   onPress={() =>
-                    setExpandedEntry(
-                      expanded ? null : index
-                    )
+                    setExpandedEntry(expanded ? null : item.id)
                   }
                 >
                   <View style={styles.entryTopRow}>
@@ -710,12 +763,11 @@ export default function Journal() {
                       </View>
 
                       <TouchableOpacity
-                        onPress={() => deleteEntry(index)}
+                        onPress={() => deleteEntry(item.id)}
                         style={styles.deleteButton}
+                        accessibilityLabel="Delete journal entry"
                       >
-                        <Text style={styles.deleteText}>
-                          ×
-                        </Text>
+                        <Text style={styles.deleteText}>×</Text>
                       </TouchableOpacity>
                     </View>
                   </View>
@@ -728,39 +780,34 @@ export default function Journal() {
                   </Text>
 
                   <Text style={styles.expandText}>
-                    {expanded
-                      ? "Tap to collapse"
-                      : "Tap to read more"}
+                    {expanded ? "Tap to collapse" : "Tap to read more"}
                   </Text>
                 </TouchableOpacity>
               );
-            })}
-          </View>
-        )}
+            })
+          ) : (
+            <View style={styles.emptyState}>
+              <View style={styles.emptyHeart}>
+                <Text style={styles.emptySymbol}>♡</Text>
+              </View>
 
-        {entries.length === 0 && (
-          <View style={styles.emptyState}>
-            <View style={styles.emptyHeart}>
-              <Text style={styles.emptySymbol}>♡</Text>
-            </View>
-
-            <Text style={styles.emptyTitle}>
-              Your moments will live here.
-            </Text>
-
-            <Text style={styles.emptyText}>
-              Start with something small.
-              {"\n"}
-              How was your day? What made you smile?
-            </Text>
-
-            <View style={styles.emptyBadge}>
-              <Text style={styles.emptyBadgeText}>
-                One thought is enough.
+              <Text style={styles.emptyTitle}>
+                Your moments will live here.
               </Text>
+
+              <Text style={styles.emptyText}>
+                Start with something small.{"\n"}
+                How was your day? What made you smile?
+              </Text>
+
+              <View style={styles.emptyBadge}>
+                <Text style={styles.emptyBadgeText}>
+                  One thought is enough.
+                </Text>
+              </View>
             </View>
-          </View>
-        )}
+          )}
+        </View>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -773,7 +820,7 @@ const styles = StyleSheet.create({
   },
 
   floatingLayer: {
-    ...StyleSheet.absoluteFill,
+    top:0,bottom:0,right:0,left:0,
     zIndex: 0,
   },
 
@@ -816,8 +863,6 @@ const styles = StyleSheet.create({
     marginTop: 14,
   },
 
-  /* ---------- MOOD ---------- */
-
   moodSection: {
     marginTop: 24,
   },
@@ -847,10 +892,7 @@ const styles = StyleSheet.create({
     shadowColor: "#000",
     shadowOpacity: 0.035,
     shadowRadius: 8,
-    shadowOffset: {
-      width: 0,
-      height: 3,
-    },
+    shadowOffset: { width: 0, height: 3 },
     elevation: 2,
   },
 
@@ -884,8 +926,6 @@ const styles = StyleSheet.create({
     color: C.deepTeal,
   },
 
-  /* ---------- EDITOR ---------- */
-
   editor: {
     backgroundColor: C.white,
     borderRadius: 28,
@@ -897,10 +937,7 @@ const styles = StyleSheet.create({
     shadowColor: "#000",
     shadowOpacity: 0.04,
     shadowRadius: 10,
-    shadowOffset: {
-      width: 0,
-      height: 4,
-    },
+    shadowOffset: { width: 0, height: 4 },
     elevation: 2,
   },
 
@@ -928,8 +965,6 @@ const styles = StyleSheet.create({
     color: C.muted,
     fontWeight: "600",
   },
-
-  /* ---------- PROMPTS ---------- */
 
   promptSection: {
     marginTop: 22,
@@ -973,8 +1008,6 @@ const styles = StyleSheet.create({
     color: C.white,
   },
 
-  /* ---------- SAVE BUTTON ---------- */
-
   saveButton: {
     backgroundColor: C.deepTeal,
     borderRadius: 30,
@@ -984,18 +1017,16 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     flexDirection: "row",
     marginTop: 18,
+    minHeight: 54,
     shadowColor: C.deepTeal,
     shadowOpacity: 0.15,
     shadowRadius: 10,
-    shadowOffset: {
-      width: 0,
-      height: 5,
-    },
+    shadowOffset: { width: 0, height: 5 },
     elevation: 3,
   },
 
   disabledButton: {
-    opacity: 0.35,
+    opacity: 0.55,
   },
 
   saveText: {
@@ -1010,8 +1041,6 @@ const styles = StyleSheet.create({
     marginLeft: 8,
     fontWeight: "700",
   },
-
-  /* ---------- SAVED MESSAGE ---------- */
 
   savedMessage: {
     marginTop: 12,
@@ -1041,8 +1070,6 @@ const styles = StyleSheet.create({
     color: C.deepTeal,
     fontWeight: "600",
   },
-
-  /* ---------- SAVED SECTION ---------- */
 
   savedSection: {
     marginTop: 35,
@@ -1082,6 +1109,20 @@ const styles = StyleSheet.create({
     color: C.dark,
   },
 
+  loadingState: {
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 28,
+    backgroundColor: C.white,
+    borderRadius: 22,
+  },
+
+  loadingText: {
+    marginTop: 10,
+    fontSize: 13,
+    color: C.muted,
+  },
+
   entryCard: {
     backgroundColor: C.white,
     borderRadius: 22,
@@ -1092,10 +1133,7 @@ const styles = StyleSheet.create({
     shadowColor: "#000",
     shadowOpacity: 0.035,
     shadowRadius: 8,
-    shadowOffset: {
-      width: 0,
-      height: 3,
-    },
+    shadowOffset: { width: 0, height: 3 },
     elevation: 2,
   },
 
@@ -1161,10 +1199,8 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
 
-  /* ---------- EMPTY STATE ---------- */
-
   emptyState: {
-    marginTop: 35,
+    marginTop: 10,
     backgroundColor: C.paleTeal,
     borderRadius: 25,
     padding: 25,

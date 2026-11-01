@@ -1,16 +1,19 @@
 import React, {
   useEffect,
-  useMemo,
   useRef,
   useState,
 } from "react";
 
 import {
+  ActivityIndicator,
+  Alert,
   Animated,
   Dimensions,
   Easing,
+  KeyboardAvoidingView,
+  Keyboard,
   Modal,
-  PanResponder,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -19,13 +22,21 @@ import {
   View,
 } from "react-native";
 
-import { router } from "expo-router";
+import { useRouter } from "expo-router";
+
+import {
+  addCommunityReply,
+  createCommunityPost,
+  hasSupportedPost,
+  subscribeToCommunityPosts,
+  toggleCommunitySupport,
+} from "../utils/communityService";
 
 const { width, height } = Dimensions.get("window");
 
-/* -------------------------------------------------------
-   MAMAMIND COLOUR PALETTE
-------------------------------------------------------- */
+/* =====================================================
+   MAMAMIND COLOURS
+===================================================== */
 
 const C = {
   yellow: "#FFDA57",
@@ -39,334 +50,255 @@ const C = {
   muted: "#648384",
 } as const;
 
-/* -------------------------------------------------------
+/* =====================================================
+   TYPES
+===================================================== */
+
+type CommunityPost = {
+  id: string;
+  userId: string;
+  name: string;
+  text: string;
+  supports: number;
+  replies: number;
+  supported: boolean;
+  createdAt?: any;
+};
+
+/* =====================================================
    FLOATING ELEMENTS
-   Same floating system as the dashboard
-------------------------------------------------------- */
+===================================================== */
 
-type FloatType =
-  | "circle"
-  | "dot"
-  | "ring"
-  | "heart"
-  | "star"
-  | "bubble";
-
-type FloatDefinition = {
-  type: FloatType;
-  left: number;
-  top: number;
-  size: number;
-  color: string;
-};
-
-type FloatItem = {
-  x: Animated.Value;
-  y: Animated.Value;
-  scale: Animated.Value;
-  rotate: Animated.Value;
-};
-
-const floatingDefinitions: FloatDefinition[] = [
+const floatingDefinitions = [
   {
     type: "bubble",
-    left: 0.04,
+    left: 0.03,
     top: 0.12,
-    size: 45,
+    size: 46,
     color: C.yellow,
   },
   {
     type: "dot",
-    left: 0.88,
+    left: 0.91,
     top: 0.08,
-    size: 17,
+    size: 15,
     color: C.coral,
   },
   {
     type: "heart",
-    left: 0.08,
-    top: 0.30,
-    size: 35,
+    left: 0.05,
+    top: 0.32,
+    size: 30,
     color: C.teal,
   },
   {
     type: "ring",
     left: 0.91,
     top: 0.29,
-    size: 34,
+    size: 30,
     color: C.yellow,
   },
   {
     type: "star",
-    left: 0.03,
-    top: 0.53,
-    size: 31,
+    left: 0.04,
+    top: 0.57,
+    size: 27,
     color: C.coral,
   },
   {
     type: "bubble",
     left: 0.91,
-    top: 0.52,
-    size: 48,
+    top: 0.54,
+    size: 42,
     color: C.teal,
   },
   {
     type: "dot",
-    left: 0.18,
-    top: 0.70,
-    size: 14,
+    left: 0.14,
+    top: 0.76,
+    size: 12,
     color: C.yellow,
   },
   {
     type: "ring",
-    left: 0.82,
-    top: 0.73,
-    size: 26,
+    left: 0.84,
+    top: 0.79,
+    size: 24,
     color: C.coral,
-  },
-  {
-    type: "heart",
-    left: 0.08,
-    top: 0.86,
-    size: 29,
-    color: C.yellow,
-  },
-  {
-    type: "dot",
-    left: 0.94,
-    top: 0.90,
-    size: 13,
-    color: C.teal,
   },
 ];
 
-/* -------------------------------------------------------
-   POST TYPE
-------------------------------------------------------- */
-
-type CommunityPost = {
-  name: string;
-  text: string;
-  supports: number;
-  replies: number;
-  supported: boolean;
-};
-
-/* -------------------------------------------------------
+/* =====================================================
    FLOATING SHAPE
-------------------------------------------------------- */
+===================================================== */
 
-const FloatingShape = ({
-  definition,
+function FloatingShape({
   item,
+  animation,
 }: {
-  definition: FloatDefinition;
-  item: FloatItem;
-}) => {
-  const renderShape = () => {
-    switch (definition.type) {
-      case "heart":
-        return (
-          <Text
-            style={[
-              styles.floatHeart,
-              {
-                color: definition.color,
-                fontSize: definition.size,
-              },
-            ]}
-          >
-            ♡
-          </Text>
-        );
+  item: (typeof floatingDefinitions)[number];
+  animation: {
+    x: Animated.Value;
+    y: Animated.Value;
+    scale: Animated.Value;
+    rotate: Animated.Value;
+  };
+}) {
+  const rotate = animation.rotate.interpolate({
+    inputRange: [-1, 0, 1],
+    outputRange: ["-8deg", "0deg", "8deg"],
+  });
 
-      case "star":
-        return (
-          <Text
-            style={[
-              styles.floatStar,
-              {
-                color: definition.color,
-                fontSize: definition.size,
-              },
-            ]}
-          >
-            ✦
-          </Text>
-        );
-
-      case "ring":
-        return (
-          <View
-            style={{
-              width: definition.size,
-              height: definition.size,
-              borderRadius: definition.size / 2,
-              borderWidth: 3,
-              borderColor: definition.color,
-            }}
-          />
-        );
-
-      case "dot":
-        return (
-          <View
-            style={{
-              width: definition.size,
-              height: definition.size,
-              borderRadius: definition.size / 2,
-              backgroundColor: definition.color,
-            }}
-          />
-        );
-
-      case "bubble":
-        return (
-          <View
-            style={{
-              width: definition.size,
-              height: definition.size,
-              borderRadius:
-                definition.size * 0.38,
-              backgroundColor:
-                definition.color,
-              opacity: 0.9,
-            }}
-          />
-        );
-
-      case "circle":
-        return (
-          <View
-            style={{
-              width: definition.size,
-              height: definition.size,
-              borderRadius:
-                definition.size / 2,
-              backgroundColor:
-                definition.color,
-            }}
-          />
-        );
-
-      default:
-        return null;
-    }
+  const baseStyle = {
+    position: "absolute" as const,
+    left: item.left * width,
+    top: item.top * height,
+    width: item.size,
+    height: item.size,
+    transform: [
+      { translateX: animation.x },
+      { translateY: animation.y },
+      { scale: animation.scale },
+      { rotate },
+    ],
   };
 
+  if (item.type === "bubble") {
+    return (
+      <Animated.View
+        style={[
+          baseStyle,
+          {
+            borderRadius: item.size / 2,
+            backgroundColor: item.color,
+            opacity: 0.18,
+          },
+        ]}
+      />
+    );
+  }
+
+  if (item.type === "dot") {
+    return (
+      <Animated.View
+        style={[
+          baseStyle,
+          {
+            borderRadius: item.size / 2,
+            backgroundColor: item.color,
+            opacity: 0.35,
+          },
+        ]}
+      />
+    );
+  }
+
+  if (item.type === "ring") {
+    return (
+      <Animated.View
+        style={[
+          baseStyle,
+          {
+            borderRadius: item.size / 2,
+            borderWidth: 3,
+            borderColor: item.color,
+            opacity: 0.28,
+          },
+        ]}
+      />
+    );
+  }
+
+  if (item.type === "heart") {
+    return (
+      <Animated.View style={baseStyle}>
+        <Text
+          style={{
+            fontSize: item.size,
+            color: item.color,
+            opacity: 0.25,
+          }}
+        >
+          ♡
+        </Text>
+      </Animated.View>
+    );
+  }
+
   return (
-    <Animated.View
-      pointerEvents="none"
-      style={[
-        styles.floatingElement,
-        {
-          left:
-            width * definition.left,
-          top:
-            height * definition.top,
-          transform: [
-            {
-              translateX: item.x,
-            },
-            {
-              translateY: item.y,
-            },
-            {
-              scale: item.scale,
-            },
-            {
-              rotate:
-                item.rotate.interpolate({
-                  inputRange: [-1, 1],
-                  outputRange: [
-                    "-10deg",
-                    "10deg",
-                  ],
-                }),
-            },
-          ],
-        },
-      ]}
-    >
-      {renderShape()}
+    <Animated.View style={baseStyle}>
+      <Text
+        style={{
+          fontSize: item.size,
+          color: item.color,
+          opacity: 0.25,
+        }}
+      >
+        ✦
+      </Text>
     </Animated.View>
   );
-};
+}
 
-/* -------------------------------------------------------
-   COMMUNITY
-------------------------------------------------------- */
+/* =====================================================
+   MAIN COMMUNITY
+===================================================== */
 
 export default function Community() {
-  const [post, setPost] = useState("");
+  const router = useRouter();
+
+  /* ---------------------------------------------------
+     POSTS
+  --------------------------------------------------- */
 
   const [posts, setPosts] = useState<
     CommunityPost[]
-  >([
-    {
-      name: "Ananya",
-      text: "Today I finally got a little time for myself. It felt really good. ♡",
-      supports: 12,
-      replies: 3,
-      supported: false,
-    },
-    {
-      name: "Meera",
-      text: "Does anyone have a simple bedtime routine that works for their little one?",
-      supports: 8,
-      replies: 5,
-      supported: false,
-    },
-    {
-      name: "Priya",
-      text: "A reminder for every mama: you are doing enough. 🌿",
-      supports: 15,
-      replies: 2,
-      supported: false,
-    },
-  ]);
+  >([]);
 
-  /* -------------------------------------------------------
-     REPLY
-  ------------------------------------------------------- */
+  const [loading, setLoading] = useState(true);
 
-  const [replyModalVisible, setReplyModalVisible] =
-    useState(false);
+  const [posting, setPosting] = useState(false);
 
-  const [replyText, setReplyText] =
-    useState("");
+  /* ---------------------------------------------------
+     CREATE POST
+  --------------------------------------------------- */
 
-  const [replyPostIndex, setReplyPostIndex] =
-    useState<number | null>(null);
-
-  /* -------------------------------------------------------
-     EXTRA INTERACTION STATES
-  ------------------------------------------------------- */
-
-  const [sharedMessage, setSharedMessage] =
-    useState(false);
+  const [postText, setPostText] = useState("");
 
   const [selectedPrompt, setSelectedPrompt] =
     useState<string | null>(null);
 
-  const shareScale =
-    useRef(new Animated.Value(1)).current;
+  const [sharedMessage, setSharedMessage] =
+    useState(false);
 
-  const replyScale =
-    useRef(new Animated.Value(1)).current;
+  /* ---------------------------------------------------
+     REPLY
+  --------------------------------------------------- */
 
-  const promptScale =
-    useRef(new Animated.Value(1)).current;
+  const [replyModalVisible, setReplyModalVisible] =
+    useState(false);
 
-  const cardScales = useRef<
-    Animated.Value[]
-  >([]);
+  const [replyPost, setReplyPost] =
+    useState<CommunityPost | null>(null);
 
-  /* -------------------------------------------------------
-     FLOATING ITEMS
-  ------------------------------------------------------- */
+  const [replyText, setReplyText] =
+    useState("");
 
-  const floatingItems = useRef<FloatItem[]>(
+  const [sendingReply, setSendingReply] =
+    useState(false);
+
+  /* ---------------------------------------------------
+     SUPPORT LOADING
+  --------------------------------------------------- */
+
+  const [supportingPostId, setSupportingPostId] =
+    useState<string | null>(null);
+
+  /* ---------------------------------------------------
+     FLOATING ANIMATION
+  --------------------------------------------------- */
+
+  const floatingItems = useRef(
     floatingDefinitions.map(() => ({
       x: new Animated.Value(0),
       y: new Animated.Value(0),
@@ -375,482 +307,464 @@ export default function Community() {
     }))
   ).current;
 
-  const animations = useRef<
-    Animated.CompositeAnimation[]
-  >([]).current;
+  /* ---------------------------------------------------
+     BUTTON ANIMATION
+  --------------------------------------------------- */
 
-  /* -------------------------------------------------------
-     WRITING PROMPTS
-  ------------------------------------------------------- */
+  const shareScale = useRef(
+    new Animated.Value(1)
+  ).current;
 
-  const writingPrompts = [
+  /* ===================================================
+     FLOATING ANIMATION EFFECT
+  =================================================== */
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const timers: ReturnType<
+      typeof setTimeout
+    >[] = [];
+
+    floatingItems.forEach((item, index) => {
+      const move = () => {
+        if (cancelled) return;
+
+        const xDistance =
+          (Math.random() - 0.5) * 65;
+
+        const yDistance =
+          (Math.random() - 0.5) * 60;
+
+        const duration =
+          6500 + Math.random() * 2500;
+
+        const rotateTarget =
+          Math.random() > 0.5 ? 1 : -1;
+
+        const animation = Animated.parallel([
+          Animated.timing(item.x, {
+            toValue: xDistance,
+            duration,
+            easing: Easing.inOut(Easing.sin),
+            useNativeDriver: true,
+          }),
+
+          Animated.timing(item.y, {
+            toValue: yDistance,
+            duration,
+            easing: Easing.inOut(Easing.sin),
+            useNativeDriver: true,
+          }),
+
+          Animated.sequence([
+            Animated.timing(item.scale, {
+              toValue: 1.05,
+              duration: duration / 2,
+              easing: Easing.inOut(Easing.sin),
+              useNativeDriver: true,
+            }),
+
+            Animated.timing(item.scale, {
+              toValue: 1,
+              duration: duration / 2,
+              easing: Easing.inOut(Easing.sin),
+              useNativeDriver: true,
+            }),
+          ]),
+
+          Animated.sequence([
+            Animated.timing(item.rotate, {
+              toValue: rotateTarget,
+              duration: duration / 2,
+              easing: Easing.inOut(Easing.sin),
+              useNativeDriver: true,
+            }),
+
+            Animated.timing(item.rotate, {
+              toValue: 0,
+              duration: duration / 2,
+              easing: Easing.inOut(Easing.sin),
+              useNativeDriver: true,
+            }),
+          ]),
+        ]);
+
+        animation.start(({ finished }) => {
+          if (finished && !cancelled) {
+            move();
+          }
+        });
+      };
+
+      const timer = setTimeout(
+        move,
+        index * 220
+      );
+
+      timers.push(timer);
+    });
+
+    return () => {
+      cancelled = true;
+
+      timers.forEach((timer) =>
+        clearTimeout(timer)
+      );
+
+      floatingItems.forEach((item) => {
+        item.x.stopAnimation();
+        item.y.stopAnimation();
+        item.scale.stopAnimation();
+        item.rotate.stopAnimation();
+      });
+    };
+  }, [floatingItems]);
+
+  /* ===================================================
+     FIREBASE REAL-TIME FEED
+  =================================================== */
+
+  useEffect(() => {
+    const unsubscribe =
+      subscribeToCommunityPosts(
+        async (firebasePosts) => {
+          const formattedPosts: CommunityPost[] =
+            firebasePosts.map((item) => ({
+              id: item.id,
+              userId: item.userId,
+              name: item.name,
+              text: item.text,
+              supports: item.supportCount,
+              replies: item.replyCount,
+              supported: false,
+              createdAt: item.createdAt,
+            }));
+
+          setPosts(formattedPosts);
+          setLoading(false);
+
+          /*
+           * Check which posts the current user
+           * has already supported.
+           */
+          for (const post of formattedPosts) {
+            try {
+              const supported =
+                await hasSupportedPost(
+                  post.id
+                );
+
+              setPosts((current) =>
+                current.map((item) =>
+                  item.id === post.id
+                    ? {
+                        ...item,
+                        supported,
+                      }
+                    : item
+                )
+              );
+            } catch {
+              // User may not be authenticated.
+            }
+          }
+        }
+      );
+
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
+  /* ===================================================
+     PROMPTS
+  =================================================== */
+
+  const prompts = [
     "Something I am proud of today is...",
     "Something that made me smile today...",
     "One thing I wish someone told me...",
     "Right now, I need...",
   ];
 
-  /* -------------------------------------------------------
-     FLOATING ANIMATION
-  ------------------------------------------------------- */
+  /* ===================================================
+     CREATE POST
+  =================================================== */
 
-  useEffect(() => {
-    floatingItems.forEach(
-      (item, index) => {
-        const move = () => {
-          const xDistance =
-            18 + Math.random() * 35;
+  const addPost = async () => {
+    const cleanText = postText.trim();
 
-          const yDistance =
-            15 + Math.random() * 35;
-
-          const xDirection =
-            Math.random() > 0.5
-              ? 1
-              : -1;
-
-          const yDirection =
-            Math.random() > 0.5
-              ? 1
-              : -1;
-
-          const duration =
-            5000 +
-            Math.random() * 3500;
-
-          const animation =
-            Animated.parallel([
-              Animated.timing(item.x, {
-                toValue:
-                  xDistance *
-                  xDirection,
-                duration,
-                easing:
-                  Easing.inOut(
-                    Easing.sin
-                  ),
-                useNativeDriver: true,
-              }),
-
-              Animated.timing(item.y, {
-                toValue:
-                  yDistance *
-                  yDirection,
-                duration,
-                easing:
-                  Easing.inOut(
-                    Easing.sin
-                  ),
-                useNativeDriver: true,
-              }),
-
-              Animated.sequence([
-                Animated.timing(
-                  item.scale,
-                  {
-                    toValue: 1.06,
-                    duration:
-                      duration / 2,
-                    easing:
-                      Easing.inOut(
-                        Easing.sin
-                      ),
-                    useNativeDriver: true,
-                  }
-                ),
-
-                Animated.timing(
-                  item.scale,
-                  {
-                    toValue: 1,
-                    duration:
-                      duration / 2,
-                    easing:
-                      Easing.inOut(
-                        Easing.sin
-                      ),
-                    useNativeDriver: true,
-                  }
-                ),
-              ]),
-
-              Animated.timing(
-                item.rotate,
-                {
-                  toValue:
-                    Math.random() >
-                    0.5
-                      ? 1
-                      : -1,
-                  duration,
-                  easing:
-                    Easing.inOut(
-                      Easing.sin
-                    ),
-                  useNativeDriver: true,
-                }
-              ),
-            ]);
-
-          animations[index] =
-            animation;
-
-          animation.start(
-            ({ finished }) => {
-              if (finished) {
-                item.x.setValue(0);
-                item.y.setValue(0);
-                item.rotate.setValue(
-                  0
-                );
-
-                move();
-              }
-            }
-          );
-        };
-
-        setTimeout(
-          () => {
-            move();
-          },
-          index * 250
-        );
-      }
-    );
-
-    return () => {
-      animations.forEach(
-        (animation) =>
-          animation?.stop()
+    if (!cleanText) {
+      Alert.alert(
+        "Share something",
+        "Write a little something before sharing."
       );
-    };
-  }, []);
 
-  /* -------------------------------------------------------
-     TOUCH / MOUSE INTERACTION
-     Floating elements repel from cursor/finger
-  ------------------------------------------------------- */
-
-  const repelFloatingElements = (
-    x: number,
-    y: number
-  ) => {
-    floatingDefinitions.forEach(
-      (definition, index) => {
-        const item =
-          floatingItems[index];
-
-        const elementX =
-          width *
-          definition.left;
-
-        const elementY =
-          height *
-          definition.top;
-
-        const distanceX =
-          elementX - x;
-
-        const distanceY =
-          elementY - y;
-
-        const distance =
-          Math.sqrt(
-            distanceX *
-              distanceX +
-              distanceY *
-                distanceY
-          );
-
-        const interactionRadius =
-          150;
-
-        if (
-          distance <
-          interactionRadius
-        ) {
-          const strength =
-            (interactionRadius -
-              distance) /
-            interactionRadius;
-
-          const pushX =
-            (distanceX /
-              (distance || 1)) *
-            45 *
-            strength;
-
-          const pushY =
-            (distanceY /
-              (distance || 1)) *
-            45 *
-            strength;
-
-          Animated.parallel([
-            Animated.spring(item.x, {
-              toValue: pushX,
-              tension: 45,
-              friction: 7,
-              useNativeDriver: true,
-            }),
-
-            Animated.spring(item.y, {
-              toValue: pushY,
-              tension: 45,
-              friction: 7,
-              useNativeDriver: true,
-            }),
-          ]).start();
-        }
-      }
-    );
-  };
-
-  const panResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder:
-          () => true,
-
-        onMoveShouldSetPanResponder:
-          () => true,
-
-        onPanResponderMove: (
-          _,
-          gesture
-        ) => {
-          repelFloatingElements(
-            gesture.moveX,
-            gesture.moveY
-          );
-        },
-
-        onPanResponderRelease: () => {
-          floatingItems.forEach(
-            (item) => {
-              Animated.spring(item.x, {
-                toValue: 0,
-                tension: 35,
-                friction: 8,
-                useNativeDriver: true,
-              }).start();
-
-              Animated.spring(item.y, {
-                toValue: 0,
-                tension: 35,
-                friction: 8,
-                useNativeDriver: true,
-              }).start();
-            }
-          );
-        },
-      }),
-    []
-  );
-
-  /* -------------------------------------------------------
-     ADD POST
-  ------------------------------------------------------- */
-
-  const addPost = () => {
-    if (!post.trim()) return;
-
-    setPosts((previous) => [
-      {
-        name: "You",
-        text: post.trim(),
-        supports: 0,
-        replies: 0,
-        supported: false,
-      },
-      ...previous,
-    ]);
-
-    setPost("");
-    setSelectedPrompt(null);
-
-    Animated.sequence([
-      Animated.spring(shareScale, {
-        toValue: 0.94,
-        friction: 5,
-        tension: 100,
-        useNativeDriver: true,
-      }),
-
-      Animated.spring(shareScale, {
-        toValue: 1,
-        friction: 5,
-        tension: 90,
-        useNativeDriver: true,
-      }),
-    ]).start();
-
-    setSharedMessage(true);
-
-    setTimeout(() => {
-      setSharedMessage(false);
-    }, 2200);
-  };
-
-  /* -------------------------------------------------------
-     SUPPORT POST
-  ------------------------------------------------------- */
-
-  const toggleSupport = (index: number) => {
-    setPosts((previous) =>
-      previous.map(
-        (item, itemIndex) => {
-          if (itemIndex !== index) {
-            return item;
-          }
-
-          return {
-            ...item,
-            supported:
-              !item.supported,
-            supports:
-              item.supported
-                ? Math.max(
-                    0,
-                    item.supports - 1
-                  )
-                : item.supports + 1,
-          };
-        }
-      )
-    );
-  };
-
-  /* -------------------------------------------------------
-     OPEN REPLY
-  ------------------------------------------------------- */
-
-  const openReply = (index: number) => {
-    setReplyPostIndex(index);
-    setReplyText("");
-    setReplyModalVisible(true);
-
-    Animated.sequence([
-      Animated.spring(replyScale, {
-        toValue: 0.94,
-        friction: 5,
-        tension: 100,
-        useNativeDriver: true,
-      }),
-
-      Animated.spring(replyScale, {
-        toValue: 1,
-        friction: 5,
-        tension: 90,
-        useNativeDriver: true,
-      }),
-    ]).start();
-  };
-
-  /* -------------------------------------------------------
-     SEND REPLY
-  ------------------------------------------------------- */
-
-  const sendReply = () => {
-    if (
-      !replyText.trim() ||
-      replyPostIndex === null
-    ) {
       return;
     }
 
-    setPosts((previous) =>
-      previous.map(
-        (item, index) =>
-          index === replyPostIndex
-            ? {
-                ...item,
-                replies:
-                  item.replies + 1,
-              }
-            : item
-      )
-    );
+    if (cleanText.length > 500) {
+      Alert.alert(
+        "That's a little long",
+        "Please keep your post under 500 characters."
+      );
 
+      return;
+    }
+
+    try {
+      setPosting(true);
+
+      await createCommunityPost(cleanText);
+
+      setPostText("");
+      setSelectedPrompt(null);
+
+      Animated.sequence([
+        Animated.spring(shareScale, {
+          toValue: 0.94,
+          friction: 5,
+          tension: 100,
+          useNativeDriver: true,
+        }),
+
+        Animated.spring(shareScale, {
+          toValue: 1,
+          friction: 5,
+          tension: 90,
+          useNativeDriver: true,
+        }),
+      ]).start();
+
+      setSharedMessage(true);
+
+      setTimeout(() => {
+        setSharedMessage(false);
+      }, 2200);
+    } catch (error) {
+      console.error(
+        "CREATE COMMUNITY POST ERROR:",
+        error
+      );
+
+      Alert.alert(
+        "Couldn't share",
+        "Something went wrong while sharing your post. Please try again."
+      );
+    } finally {
+      setPosting(false);
+    }
+  };
+
+  /* ===================================================
+     SUPPORT
+  =================================================== */
+
+  const toggleSupport = async (
+    post: CommunityPost
+  ) => {
+    if (supportingPostId) {
+      return;
+    }
+
+    try {
+      setSupportingPostId(post.id);
+
+      await toggleCommunitySupport(
+        post.id
+      );
+
+      /*
+       * Optimistic local update.
+       * Firestore will also update the feed
+       * through onSnapshot.
+       */
+      setPosts((current) =>
+        current.map((item) => {
+          if (item.id !== post.id) {
+            return item;
+          }
+
+          const nextSupported =
+            !item.supported;
+
+          return {
+            ...item,
+            supported: nextSupported,
+            supports:
+              item.supports +
+              (nextSupported ? 1 : -1),
+          };
+        })
+      );
+    } catch (error) {
+      console.error(
+        "SUPPORT ERROR:",
+        error
+      );
+
+      Alert.alert(
+        "Couldn't update",
+        "Please try again."
+      );
+    } finally {
+      setSupportingPostId(null);
+    }
+  };
+
+  /* ===================================================
+     OPEN REPLY
+  =================================================== */
+
+  const openReply = (
+    post: CommunityPost
+  ) => {
+    setReplyPost(post);
     setReplyText("");
-    setReplyModalVisible(false);
-    setReplyPostIndex(null);
+    setReplyModalVisible(true);
   };
 
-  /* -------------------------------------------------------
-     CLOSE REPLY
-  ------------------------------------------------------- */
+  /* ===================================================
+     SEND REPLY
+  =================================================== */
 
-  const closeReply = () => {
-    setReplyModalVisible(false);
-    setReplyText("");
-    setReplyPostIndex(null);
+  const sendReply = async () => {
+    if (!replyPost) {
+      return;
+    }
+
+    const cleanReply =
+      replyText.trim();
+
+    if (!cleanReply) {
+      return;
+    }
+
+    if (cleanReply.length > 300) {
+      Alert.alert(
+        "That's a little long",
+        "Please keep your reply under 300 characters."
+      );
+
+      return;
+    }
+
+    try {
+      setSendingReply(true);
+
+      await addCommunityReply(
+        replyPost.id,
+        cleanReply
+      );
+
+      setReplyText("");
+      setReplyModalVisible(false);
+      setReplyPost(null);
+    } catch (error) {
+      console.error(
+        "REPLY ERROR:",
+        error
+      );
+
+      Alert.alert(
+        "Couldn't send reply",
+        "Please try again."
+      );
+    } finally {
+      setSendingReply(false);
+    }
   };
 
-  /* -------------------------------------------------------
-     DAILY PROMPT
-  ------------------------------------------------------- */
+  /* ===================================================
+     FORMAT TIME
+  =================================================== */
 
-  const addDailyPrompt = () => {
-    const randomPrompt =
-      writingPrompts[
-        Math.floor(
-          Math.random() *
-            writingPrompts.length
-        )
-      ];
+  const formatTime = (
+    timestamp: any
+  ) => {
+    if (!timestamp) {
+      return "Just now";
+    }
 
-    setSelectedPrompt(
-      randomPrompt
+    try {
+      const date =
+        timestamp.toDate
+          ? timestamp.toDate()
+          : new Date(timestamp);
+
+      const difference =
+        Date.now() - date.getTime();
+
+      const minutes = Math.floor(
+        difference / 60000
+      );
+
+      if (minutes < 1) {
+        return "Just now";
+      }
+
+      if (minutes < 60) {
+        return `${minutes}m ago`;
+      }
+
+      const hours = Math.floor(
+        minutes / 60
+      );
+
+      if (hours < 24) {
+        return `${hours}h ago`;
+      }
+
+      const days = Math.floor(
+        hours / 24
+      );
+
+      if (days < 7) {
+        return `${days}d ago`;
+      }
+
+      return date.toLocaleDateString();
+    } catch {
+      return "Recently";
+    }
+  };
+
+  /* ===================================================
+     AVATAR LETTER
+  =================================================== */
+
+  const getInitial = (
+    name: string
+  ) => {
+    return (
+      name?.trim()?.charAt(0)?.toUpperCase() ||
+      "M"
     );
-
-    setPost(randomPrompt + " ");
-
-    Animated.sequence([
-      Animated.spring(promptScale, {
-        toValue: 0.95,
-        friction: 5,
-        tension: 100,
-        useNativeDriver: true,
-      }),
-
-      Animated.spring(promptScale, {
-        toValue: 1,
-        friction: 5,
-        tension: 90,
-        useNativeDriver: true,
-      }),
-    ]).start();
   };
+
+  /* ===================================================
+     RENDER
+  =================================================== */
 
   return (
-    <View
-      style={styles.screen}
-      {...panResponder.panHandlers}
-    >
-      {/* -------------------------------------------------------
-         FLOATING BACKGROUND
-      ------------------------------------------------------- */}
+    <View style={styles.screen}>
+
+      {/* -----------------------------------------------
+          FLOATING BACKGROUND
+      ----------------------------------------------- */}
 
       <View
         pointerEvents="none"
         style={styles.floatingLayer}
       >
         {floatingDefinitions.map(
-          (
-            definition,
-            index
-          ) => (
+          (item, index) => (
             <FloatingShape
               key={index}
-              definition={
-                definition
-              }
-              item={
-                floatingItems[
-                  index
-                ]
+              item={item}
+              animation={
+                floatingItems[index]
               }
             />
           )
@@ -860,35 +774,38 @@ export default function Community() {
       <ScrollView
         style={styles.container}
         contentContainerStyle={
-          styles.content
+          styles.contentContainer
         }
-        showsVerticalScrollIndicator={
-          false
-        }
+        showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
-        {/* BACK */}
 
-        <Pressable
-          style={({ pressed }) => [
-            styles.backButton,
-            pressed &&
-              styles.smallPressed,
-          ]}
-          onPress={() =>
-            router.back()
-          }
-        >
-          <Text
-            style={styles.backText}
+        {/* ---------------------------------------------
+            HEADER
+        --------------------------------------------- */}
+
+        <View style={styles.topBar}>
+          <Pressable
+            onPress={() => router.back()}
+            style={({ pressed }) => [
+              styles.backButton,
+              pressed &&
+                styles.pressedSmall,
+            ]}
           >
-            ← Back
+            <Text style={styles.backArrow}>
+              ←
+            </Text>
+          </Pressable>
+
+          <Text style={styles.topBarLabel}>
+            MAMAMIND
           </Text>
-        </Pressable>
 
-        {/* HEADER */}
+          <View style={styles.topBarSpacer} />
+        </View>
 
-        <Text style={styles.label}>
+        <Text style={styles.eyebrow}>
           MOTHER TO MOTHER
         </Text>
 
@@ -896,314 +813,304 @@ export default function Community() {
           Your Village
         </Text>
 
-        <Text
-          style={styles.subtitle}
-        >
-          A gentle space to share, listen and remind each
-          other that none of us has to do this alone.
+        <Text style={styles.subtitle}>
+          A gentle space to share, listen and
+          remind each other that none of us
+          has to do this alone.
         </Text>
 
-        {/* -------------------------------------------------------
-           CREATE POST
-        ------------------------------------------------------- */}
+        {/* ---------------------------------------------
+            COMMUNITY STATS
+        --------------------------------------------- */}
 
-        <View
-          style={styles.createCard}
-        >
-          <View
-            style={
-              styles.createHeader
-            }
-          >
+        <View style={styles.communityInfoRow}>
+          <View style={styles.infoPill}>
             <View
-              style={
-                styles.createHeaderText
-              }
-            >
-              <Text
-                style={
-                  styles.createTitle
-                }
-              >
+              style={styles.infoDot}
+            />
+
+            <Text style={styles.infoText}>
+              {posts.length === 0
+                ? "New village"
+                : `${posts.length} stories`}
+            </Text>
+          </View>
+
+          <View style={styles.safePill}>
+            <Text style={styles.safePillText}>
+              A gentle space
+            </Text>
+          </View>
+        </View>
+
+        {/* ---------------------------------------------
+            CREATE POST
+        --------------------------------------------- */}
+
+        <View style={styles.createCard}>
+
+          <View style={styles.createHeader}>
+            <View>
+              <Text style={styles.createTitle}>
                 Share something with the village
               </Text>
 
-              <Text
-                style={
-                  styles.createSubtitle
-                }
-              >
+              <Text style={styles.createSubtitle}>
                 A thought, a question or a little win.
               </Text>
             </View>
 
-            {/* DAILY PROMPT */}
-
-            <Animated.View
-              style={{
-                transform: [
-                  {
-                    scale:
-                      promptScale,
-                  },
-                ],
-              }}
-            >
-              <Pressable
-                style={({ pressed }) => [
-                  styles.promptButton,
-                  pressed &&
-                    styles.smallPressed,
-                ]}
-                onPress={
-                  addDailyPrompt
-                }
-              >
-                <Text
-                  style={
-                    styles.promptButtonIcon
-                  }
-                >
-                  ✦
-                </Text>
-
-                <Text
-                  style={
-                    styles.promptButtonText
-                  }
-                >
-                  Prompt
-                </Text>
-              </Pressable>
-            </Animated.View>
-          </View>
-
-          <TextInput
-            value={post}
-            onChangeText={setPost}
-            placeholder="Write a thought, question or little win..."
-            placeholderTextColor="#82A1A1"
-            multiline
-            maxLength={500}
-            style={styles.input}
-            textAlignVertical="top"
-          />
-
-          <View
-            style={
-              styles.inputFooter
-            }
-          >
-            <Text
-              style={
-                styles.privacyText
-              }
-            >
-              Share only what feels comfortable.
-            </Text>
-
-            <Text
-              style={
-                styles.characterCount
-              }
-            >
-              {post.length}/500
-            </Text>
-          </View>
-
-          {/* SELECTED PROMPT */}
-
-          {selectedPrompt && (
-            <View
-              style={
-                styles.selectedPrompt
-              }
-            >
-              <Text
-                style={
-                  styles.selectedPromptIcon
-                }
-              >
-                ✦
-              </Text>
-
-              <Text
-                style={
-                  styles.selectedPromptText
-                }
-              >
-                {selectedPrompt}
+            <View style={styles.createSymbol}>
+              <Text style={styles.createSymbolText}>
+                ♡
               </Text>
             </View>
-          )}
+          </View>
 
-          {/* SHARE */}
+          {/* PROMPTS */}
+
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={
+              styles.promptScroll
+            }
+          >
+            {prompts.map(
+              (prompt, index) => (
+                <Pressable
+                  key={index}
+                  onPress={() => {
+                    setSelectedPrompt(
+                      prompt
+                    );
+
+                    setPostText(
+                      prompt
+                    );
+                  }}
+                  style={[
+                    styles.promptChip,
+                    selectedPrompt ===
+                      prompt &&
+                      styles.promptChipSelected,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.promptText,
+                      selectedPrompt ===
+                        prompt &&
+                        styles.promptTextSelected,
+                    ]}
+                  >
+                    {prompt}
+                  </Text>
+                </Pressable>
+              )
+            )}
+          </ScrollView>
+
+          {/* TEXT INPUT */}
+
+          <View style={styles.inputWrapper}>
+            <TextInput
+              value={postText}
+              onChangeText={(text) => {
+                if (text.length <= 500) {
+                  setPostText(text);
+                }
+              }}
+              placeholder="What's on your heart?"
+              placeholderTextColor={
+                C.muted
+              }
+              multiline
+              maxLength={500}
+              textAlignVertical="top"
+              style={styles.postInput}
+            />
+
+            <Text style={styles.characterCount}>
+              {postText.length}/500
+            </Text>
+          </View>
+
+          {/* SHARE BUTTON */}
 
           <Animated.View
             style={{
               transform: [
                 {
-                  scale:
-                    shareScale,
+                  scale: shareScale,
                 },
               ],
             }}
           >
             <Pressable
-              style={({ pressed }) => [
-                styles.postButton,
-                !post.trim() &&
-                  styles.disabled,
-                pressed &&
-                  post.trim() &&
-                  styles.buttonPressed,
-              ]}
+              disabled={posting}
               onPress={addPost}
-              disabled={!post.trim()}
+              style={({ pressed }) => [
+                styles.shareButton,
+                pressed &&
+                  styles.buttonPressed,
+                posting &&
+                  styles.buttonDisabled,
+              ]}
             >
-              <Text
-                style={
-                  styles.postButtonText
-                }
-              >
-                Share with the Village
-              </Text>
+              {posting ? (
+                <ActivityIndicator
+                  color={C.dark}
+                  size="small"
+                />
+              ) : (
+                <>
+                  <Text
+                    style={
+                      styles.shareButtonText
+                    }
+                  >
+                    Share with the Village
+                  </Text>
 
-              <Text
-                style={
-                  styles.postArrow
-                }
-              >
-                →
-              </Text>
+                  <Text
+                    style={
+                      styles.shareArrow
+                    }
+                  >
+                    →
+                  </Text>
+                </>
+              )}
             </Pressable>
           </Animated.View>
-        </View>
 
-        {/* -------------------------------------------------------
-           SHARE CONFIRMATION
-        ------------------------------------------------------- */}
-
-        {sharedMessage && (
-          <Animated.View
-            style={
-              styles.sharedMessage
-            }
-          >
+          {sharedMessage && (
             <View
-              style={
-                styles.sharedIcon
-              }
+              style={styles.sharedMessage}
             >
               <Text
                 style={
-                  styles.sharedIconText
+                  styles.sharedMessageText
                 }
               >
-                ✓
+                Your story is now part of
+                the village. ♡
               </Text>
             </View>
+          )}
+        </View>
 
-            <Text
-              style={
-                styles.sharedText
-              }
-            >
-              Shared with your village ♡
-            </Text>
-          </Animated.View>
-        )}
+        {/* ---------------------------------------------
+            FEED HEADER
+        --------------------------------------------- */}
 
-        {/* COMMUNITY POSTS */}
-
-        <View
-          style={
-            styles.sectionHeader
-          }
-        >
+        <View style={styles.feedHeader}>
           <View>
-            <Text
-              style={
-                styles.sectionTitle
-              }
-            >
-              From the community
+            <Text style={styles.sectionEyebrow}>
+              FROM THE COMMUNITY
             </Text>
 
-            <Text
-              style={
-                styles.sectionSubtitle
-              }
-            >
+            <Text style={styles.feedTitle}>
               Little reminders from other mamas.
             </Text>
           </View>
 
-          <View
-            style={
-              styles.postCountBadge
-            }
-          >
-            <Text
-              style={
-                styles.postCountText
-              }
-            >
-              {posts.length}
-            </Text>
-          </View>
+          {posts.length > 0 && (
+            <View style={styles.countBadge}>
+              <Text
+                style={styles.countBadgeText}
+              >
+                {posts.length}
+              </Text>
+            </View>
+          )}
         </View>
 
-        {posts.map(
-          (item, index) => {
-            if (!cardScales.current[index]) {
-              cardScales.current[index] =
-                new Animated.Value(
-                  1
-                );
-            }
+        {/* ---------------------------------------------
+            LOADING
+        --------------------------------------------- */}
 
-            return (
-              <Animated.View
-                key={`${item.name}-${index}`}
-                style={[
-                  styles.postCard,
-                  {
-                    transform: [
-                      {
-                        scale:
-                          cardScales
-                            .current[
-                            index
-                          ],
-                      },
-                    ],
-                  },
-                ]}
+        {loading && (
+          <View style={styles.loadingBox}>
+            <ActivityIndicator
+              color={C.teal}
+              size="small"
+            />
+
+            <Text style={styles.loadingText}>
+              Gathering the village...
+            </Text>
+          </View>
+        )}
+
+        {/* ---------------------------------------------
+            EMPTY STATE
+        --------------------------------------------- */}
+
+        {!loading &&
+          posts.length === 0 && (
+            <View style={styles.emptyCard}>
+              <View
+                style={
+                  styles.emptyIllustration
+                }
               >
-                {/* AVATAR */}
+                <Text
+                  style={
+                    styles.emptyHeart
+                  }
+                >
+                  ♡
+                </Text>
+              </View>
 
+              <Text style={styles.emptyTitle}>
+                Be the first to share
+              </Text>
+
+              <Text style={styles.emptyText}>
+                Your little story could be the
+                reminder another mama needs today.
+              </Text>
+            </View>
+          )}
+
+        {/* ---------------------------------------------
+            POSTS
+        --------------------------------------------- */}
+
+        {!loading &&
+          posts.map((post) => (
+            <View
+              key={post.id}
+              style={styles.postCard}
+            >
+
+              {/* POST HEADER */}
+
+              <View style={styles.postHeader}>
                 <View
-                  style={styles.avatar}
+                  style={
+                    styles.avatar
+                  }
                 >
                   <Text
                     style={
                       styles.avatarText
                     }
                   >
-                    {item.name.charAt(
-                      0
+                    {getInitial(
+                      post.name
                     )}
                   </Text>
                 </View>
 
                 <View
                   style={
-                    styles.postContent
+                    styles.postIdentity
                   }
                 >
-                  {/* NAME */}
-
                   <View
                     style={
                       styles.nameRow
@@ -1211,353 +1118,411 @@ export default function Community() {
                   >
                     <Text
                       style={
-                        styles.name
+                        styles.postName
                       }
                     >
-                      {item.name}
+                      {post.name}
                     </Text>
 
-                    {item.name ===
-                      "You" && (
-                      <View
+                    <View
+                      style={
+                        styles.mamaBadge
+                      }
+                    >
+                      <Text
                         style={
-                          styles.youBadge
+                          styles.mamaBadgeText
                         }
                       >
-                        <Text
-                          style={
-                            styles.youBadgeText
-                          }
-                        >
-                          YOU
-                        </Text>
-                      </View>
-                    )}
+                        MAMA
+                      </Text>
+                    </View>
                   </View>
-
-                  {/* POST */}
 
                   <Text
                     style={
-                      styles.postText
+                      styles.postTime
                     }
                   >
-                    {item.text}
+                    {formatTime(
+                      post.createdAt
+                    )}
+                  </Text>
+                </View>
+              </View>
+
+              {/* POST TEXT */}
+
+              <Text style={styles.postText}>
+                {post.text}
+              </Text>
+
+              {/* POST ACTIONS */}
+
+              <View
+                style={
+                  styles.postActions
+                }
+              >
+
+                <Pressable
+                  disabled={
+                    supportingPostId ===
+                    post.id
+                  }
+                  onPress={() =>
+                    toggleSupport(post)
+                  }
+                  style={({ pressed }) => [
+                    styles.supportButton,
+                    pressed &&
+                      styles.actionPressed,
+                    post.supported &&
+                      styles.supportButtonActive,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.supportIcon,
+                      post.supported &&
+                        styles.supportIconActive,
+                    ]}
+                  >
+                    {post.supported
+                      ? "♥"
+                      : "♡"}
                   </Text>
 
-                  {/* REACTIONS */}
+                  <Text
+                    style={[
+                      styles.supportText,
+                      post.supported &&
+                        styles.supportTextActive,
+                    ]}
+                  >
+                    {post.supported
+                      ? "Supported"
+                      : "Support"}
+                  </Text>
 
-                  <View
+                  {post.supports >
+                    0 && (
+                    <Text
+                      style={
+                        styles.actionCount
+                      }
+                    >
+                      {post.supports}
+                    </Text>
+                  )}
+                </Pressable>
+
+                <Pressable
+                  onPress={() =>
+                    openReply(post)
+                  }
+                  style={({ pressed }) => [
+                    styles.replyButton,
+                    pressed &&
+                      styles.actionPressed,
+                  ]}
+                >
+                  <Text
                     style={
-                      styles.reactionRow
+                      styles.replyIcon
                     }
                   >
-                    {/* SUPPORT */}
+                    ◌
+                  </Text>
 
-                    <Pressable
-                      style={({ pressed }) => [
-                        styles.reactionButton,
-                        pressed &&
-                          styles.smallPressed,
-                      ]}
-                      onPress={() =>
-                        toggleSupport(
-                          index
-                        )
+                  <Text
+                    style={
+                      styles.replyText
+                    }
+                  >
+                    Reply
+                  </Text>
+
+                  {post.replies >
+                    0 && (
+                    <Text
+                      style={
+                        styles.actionCount
                       }
                     >
-                      <Text
-                        style={[
-                          styles.reaction,
-                          item.supported &&
-                            styles.reactionActive,
-                        ]}
-                      >
-                        {item.supported
-                          ? "♥ Supported"
-                          : "♡ Support"}
-                      </Text>
+                      {post.replies}
+                    </Text>
+                  )}
+                </Pressable>
+              </View>
 
-                      {item.supports >
-                        0 && (
-                        <View
-                          style={
-                            styles.reactionCount
-                          }
-                        >
-                          <Text
-                            style={
-                              styles.reactionCountText
-                            }
-                          >
-                            {item.supports}
-                          </Text>
-                        </View>
-                      )}
-                    </Pressable>
+              {/* SUPPORT MESSAGE */}
 
-                    {/* REPLY */}
-
-                    <Pressable
-                      style={({ pressed }) => [
-                        styles.reactionButton,
-                        pressed &&
-                          styles.smallPressed,
-                      ]}
-                      onPress={() =>
-                        openReply(
-                          index
-                        )
+              {post.supports > 0 && (
+                <View
+                  style={
+                    styles.supportSummary
+                  }
+                >
+                  <View
+                    style={
+                      styles.supportMiniDots
+                    }
+                  >
+                    <View
+                      style={
+                        styles.miniDotOne
                       }
-                    >
-                      <Text
-                        style={
-                          styles.reaction
-                        }
-                      >
-                        Reply
-                      </Text>
-
-                      {item.replies >
-                        0 && (
-                        <View
-                          style={
-                            styles.reactionCount
-                          }
-                        >
-                          <Text
-                            style={
-                              styles.reactionCountText
-                            }
-                          >
-                            {item.replies}
-                          </Text>
-                        </View>
-                      )}
-                    </Pressable>
+                    />
+                    <View
+                      style={
+                        styles.miniDotTwo
+                      }
+                    />
+                    <View
+                      style={
+                        styles.miniDotThree
+                      }
+                    />
                   </View>
+
+                  <Text
+                    style={
+                      styles.supportSummaryText
+                    }
+                  >
+                    {post.supports === 1
+                      ? "1 mama supported this"
+                      : `${post.supports} mamas supported this`}
+                  </Text>
                 </View>
-              </Animated.View>
-            );
-          }
-        )}
+              )}
+            </View>
+          ))}
 
-        {/* BOTTOM MESSAGE */}
+        {/* ---------------------------------------------
+            FOOTER
+        --------------------------------------------- */}
 
-        <View
-          style={
-            styles.bottomMessage
-          }
-        >
-          <View
-            style={
-              styles.bottomHeartCircle
-            }
-          >
-            <Text
-              style={
-                styles.bottomHeart
-              }
-            >
-              ♡
-            </Text>
-          </View>
+        <View style={styles.footer}>
+          <View style={styles.footerLine} />
 
-          <Text
-            style={styles.bottomTitle}
-          >
+          <Text style={styles.footerTitle}>
             There is room for every story here.
           </Text>
 
-          <Text
-            style={styles.bottomText}
-          >
+          <Text style={styles.footerText}>
             Share only what feels comfortable.
           </Text>
 
-          <View
-            style={
-              styles.bottomBadge
-            }
-          >
-            <Text
-              style={
-                styles.bottomBadgeText
-              }
-            >
-              Mamas supporting mamas
-            </Text>
-          </View>
+          <Text style={styles.footerSymbol}>
+            ♡
+          </Text>
+
+          <Text style={styles.footerBrand}>
+            Mamas supporting mamas
+          </Text>
         </View>
+
       </ScrollView>
 
-      {/* -------------------------------------------------------
-         REPLY MODAL
-      ------------------------------------------------------- */}
+      {/* =================================================
+          REPLY MODAL
+      ================================================= */}
 
       <Modal
         visible={replyModalVisible}
         transparent
-        animationType="fade"
-        onRequestClose={
-          closeReply
+        animationType="slide"
+        onRequestClose={() =>
+          setReplyModalVisible(false)
         }
       >
-        <View
-          style={
-            styles.modalOverlay
+        <KeyboardAvoidingView
+          style={styles.modalOverlay}
+          behavior={
+            Platform.OS === "ios"
+              ? "padding"
+              : undefined
           }
         >
-          <View
-            style={styles.modalCard}
-          >
+          <Pressable
+            style={styles.modalBackdrop}
+            onPress={() =>
+              setReplyModalVisible(false)
+            }
+          />
+
+          <View style={styles.replyModal}>
+
             <View
               style={
                 styles.modalHandle
               }
             />
 
-            <Text
+            <View
               style={
-                styles.modalTitle
+                styles.modalHeader
               }
             >
-              Join the conversation
-            </Text>
+              <View>
+                <Text
+                  style={
+                    styles.modalEyebrow
+                  }
+                >
+                  JOIN THE CONVERSATION
+                </Text>
 
-            <Text
-              style={
-                styles.modalSubtitle
-              }
-            >
-              A little kindness can mean a lot.
-            </Text>
+                <Text
+                  style={
+                    styles.modalTitle
+                  }
+                >
+                  A little kindness can
+                  mean a lot.
+                </Text>
+              </View>
 
-            {replyPostIndex !==
-              null && (
+              <Pressable
+                onPress={() => {
+                  setReplyModalVisible(
+                    false
+                  );
+                  setReplyPost(null);
+                }}
+                style={
+                  styles.closeButton
+                }
+              >
+                <Text
+                  style={
+                    styles.closeButtonText
+                  }
+                >
+                  ×
+                </Text>
+              </Pressable>
+            </View>
+
+            {/* ORIGINAL POST */}
+
+            {replyPost && (
               <View
                 style={
                   styles.replyPreview
                 }
               >
-                <Text
+                <View
                   style={
-                    styles.replyPreviewName
-                  }
-                >
-                  {
-                    posts[
-                      replyPostIndex
-                    ]?.name
-                  }
-                </Text>
-
-                <Text
-                  numberOfLines={3}
-                  style={
-                    styles.replyPreviewText
-                  }
-                >
-                  {
-                    posts[
-                      replyPostIndex
-                    ]?.text
-                  }
-                </Text>
-              </View>
-            )}
-
-            <TextInput
-              value={replyText}
-              onChangeText={
-                setReplyText
-              }
-              placeholder="Write a gentle reply..."
-              placeholderTextColor="#82A1A1"
-              multiline
-              maxLength={250}
-              style={
-                styles.replyInput
-              }
-              textAlignVertical="top"
-              autoFocus
-            />
-
-            <View
-              style={
-                styles.replyCharacterRow
-              }
-            >
-              <Text
-                style={
-                  styles.replyHint
-                }
-              >
-                Kind words are always welcome.
-              </Text>
-
-              <Text
-                style={
-                  styles.characterCount
-                }
-              >
-                {replyText.length}/250
-              </Text>
-            </View>
-
-            <View
-              style={
-                styles.modalButtons
-              }
-            >
-              <Pressable
-                style={({ pressed }) => [
-                  styles.cancelButton,
-                  pressed &&
-                    styles.smallPressed,
-                ]}
-                onPress={
-                  closeReply
-                }
-              >
-                <Text
-                  style={
-                    styles.cancelText
-                  }
-                >
-                  Cancel
-                </Text>
-              </Pressable>
-
-              <Animated.View
-                style={{
-                  transform: [
-                    {
-                      scale:
-                        replyScale,
-                    },
-                  ],
-                }}
-              >
-                <Pressable
-                  style={({ pressed }) => [
-                    styles.replyButton,
-                    !replyText.trim() &&
-                      styles.replyDisabled,
-                    pressed &&
-                      replyText.trim() &&
-                      styles.buttonPressed,
-                  ]}
-                  onPress={
-                    sendReply
-                  }
-                  disabled={
-                    !replyText.trim()
+                    styles.replyPreviewAvatar
                   }
                 >
                   <Text
                     style={
-                      styles.replyButtonText
+                      styles.replyPreviewAvatarText
+                    }
+                  >
+                    {getInitial(
+                      replyPost.name
+                    )}
+                  </Text>
+                </View>
+
+                <View
+                  style={
+                    styles.replyPreviewContent
+                  }
+                >
+                  <Text
+                    style={
+                      styles.replyPreviewName
+                    }
+                  >
+                    {replyPost.name}
+                  </Text>
+
+                  <Text
+                    style={
+                      styles.replyPreviewText
+                    }
+                    numberOfLines={3}
+                  >
+                    {replyPost.text}
+                  </Text>
+                </View>
+              </View>
+            )}
+
+            {/* REPLY INPUT */}
+
+            <View
+              style={
+                styles.replyInputWrapper
+              }
+            >
+              <TextInput
+                value={replyText}
+                onChangeText={(text) => {
+                  if (text.length <= 300) {
+                    setReplyText(text);
+                  }
+                }}
+                placeholder="Write something kind..."
+                placeholderTextColor={
+                  C.muted
+                }
+                multiline
+                maxLength={300}
+                textAlignVertical="top"
+                style={
+                  styles.replyInput
+                }
+              />
+
+              <Text
+                style={
+                  styles.replyCharacterCount
+                }
+              >
+                {replyText.length}/300
+              </Text>
+            </View>
+
+            <Text
+              style={
+                styles.kindnessHint
+              }
+            >
+              Kind words are always welcome.
+            </Text>
+
+            <Pressable
+              disabled={
+                sendingReply ||
+                !replyText.trim()
+              }
+              onPress={sendReply}
+              style={({ pressed }) => [
+                styles.sendReplyButton,
+                pressed &&
+                  styles.buttonPressed,
+                (sendingReply ||
+                  !replyText.trim()) &&
+                  styles.buttonDisabled,
+              ]}
+            >
+              {sendingReply ? (
+                <ActivityIndicator
+                  color={C.white}
+                  size="small"
+                />
+              ) : (
+                <>
+                  <Text
+                    style={
+                      styles.sendReplyText
                     }
                   >
                     Send Reply
@@ -1565,24 +1530,25 @@ export default function Community() {
 
                   <Text
                     style={
-                      styles.replyButtonArrow
+                      styles.sendReplyArrow
                     }
                   >
                     →
                   </Text>
-                </Pressable>
-              </Animated.View>
-            </View>
+                </>
+              )}
+            </Pressable>
+
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );
 }
 
-/* -------------------------------------------------------
+/* =====================================================
    STYLES
-------------------------------------------------------- */
+===================================================== */
 
 const styles = StyleSheet.create({
   screen: {
@@ -1592,359 +1558,184 @@ const styles = StyleSheet.create({
 
   container: {
     flex: 1,
-    backgroundColor: "transparent",
   },
 
-  content: {
-    padding: 22,
-    paddingBottom: 60,
+  contentContainer: {
+    paddingHorizontal: 20,
+    paddingTop: 18,
+    paddingBottom: 70,
   },
-
-  /* -------------------------------------------------------
-     FLOATING
-  ------------------------------------------------------- */
 
   floatingLayer: {
-    ...StyleSheet.absoluteFill,
-    zIndex: 0,
-  },
+  position: "absolute",
+  top: 0,
+  left: 0,
+  right: 0,
+  bottom: 0,
+  zIndex: 0,
+},
 
-  floatingElement: {
-    position: "absolute",
+  /* ---------------------------------------------------
+     TOP BAR
+  --------------------------------------------------- */
+
+  topBar: {
+    height: 44,
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
+    justifyContent: "space-between",
+    marginBottom: 22,
   },
-
-  floatHeart: {
-    fontWeight: "800",
-  },
-
-  floatStar: {
-    fontWeight: "800",
-  },
-
-  /* -------------------------------------------------------
-     BACK
-  ------------------------------------------------------- */
 
   backButton: {
-    marginTop: 45,
-    marginBottom: 28,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: C.white,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    shadowOffset: {
+      width: 0,
+      height: 3,
+    },
+    elevation: 2,
   },
 
-  backText: {
-    fontSize: 15,
-    color: C.muted,
-    fontWeight: "600",
+  backArrow: {
+    color: C.dark,
+    fontSize: 23,
+    marginTop: -2,
   },
 
-  smallPressed: {
-    opacity: 0.72,
-  },
-
-  /* -------------------------------------------------------
-     HEADER
-  ------------------------------------------------------- */
-
-  label: {
-    fontSize: 11,
-    letterSpacing: 2,
+  topBarLabel: {
     color: C.deepTeal,
-    fontWeight: "700",
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 2.5,
+  },
+
+  topBarSpacer: {
+    width: 42,
+  },
+
+  /* ---------------------------------------------------
+     HEADER
+  --------------------------------------------------- */
+
+  eyebrow: {
+    color: C.teal,
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 2.2,
+    marginBottom: 7,
   },
 
   title: {
-    fontSize: 38,
-    fontWeight: "700",
     color: C.dark,
-    marginTop: 10,
+    fontSize: 37,
+    fontWeight: "800",
+    letterSpacing: -1.2,
+    marginBottom: 9,
   },
 
   subtitle: {
+    color: C.muted,
     fontSize: 15,
     lineHeight: 23,
-    color: C.muted,
-    marginTop: 12,
-    marginBottom: 24,
+    maxWidth: 350,
   },
 
-  /* -------------------------------------------------------
+  /* ---------------------------------------------------
+     COMMUNITY INFO
+  --------------------------------------------------- */
+
+  communityInfoRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    marginTop: 18,
+    marginBottom: 20,
+  },
+
+  infoPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: C.paleTeal,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 20,
+  },
+
+  infoDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: C.teal,
+    marginRight: 7,
+  },
+
+  infoText: {
+    color: C.deepTeal,
+    fontSize: 11,
+    fontWeight: "700",
+  },
+
+  safePill: {
+    backgroundColor: C.white,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 20,
+  },
+
+  safePillText: {
+    color: C.muted,
+    fontSize: 11,
+    fontWeight: "600",
+  },
+
+  /* ---------------------------------------------------
      CREATE CARD
-  ------------------------------------------------------- */
+  --------------------------------------------------- */
 
   createCard: {
-    backgroundColor: C.paleTeal,
-    borderRadius: 25,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: "#CDEDE9",
-
-    shadowColor: C.dark,
-    shadowOpacity: 0.05,
-    shadowRadius: 12,
+    backgroundColor: C.white,
+    borderRadius: 26,
+    padding: 18,
+    marginBottom: 31,
+    shadowColor: "#164F52",
+    shadowOpacity: 0.06,
+    shadowRadius: 16,
     shadowOffset: {
       width: 0,
-      height: 5,
+      height: 7,
     },
-
     elevation: 3,
   },
 
   createHeader: {
     flexDirection: "row",
-    alignItems: "flex-start",
+    alignItems: "center",
     justifyContent: "space-between",
-  },
-
-  createHeaderText: {
-    flex: 1,
-    paddingRight: 10,
+    marginBottom: 15,
   },
 
   createTitle: {
-    fontSize: 19,
-    fontWeight: "700",
     color: C.dark,
+    fontSize: 17,
+    fontWeight: "800",
+    marginBottom: 4,
   },
 
   createSubtitle: {
+    color: C.muted,
     fontSize: 12,
-    color: C.muted,
-    marginTop: 4,
+    lineHeight: 18,
   },
 
-  promptButton: {
-    backgroundColor: C.yellow,
-    borderRadius: 16,
-    minHeight: 34,
-    paddingHorizontal: 10,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  promptButtonIcon: {
-    fontSize: 13,
-    color: C.deepTeal,
-    marginRight: 4,
-  },
-
-  promptButtonText: {
-    fontSize: 10,
-    fontWeight: "800",
-    color: C.dark,
-  },
-
-  input: {
-    backgroundColor: C.white,
-    borderRadius: 17,
-    minHeight: 110,
-    padding: 15,
-    marginTop: 14,
-    fontSize: 15,
-    lineHeight: 21,
-    color: C.dark,
-    textAlignVertical: "top",
-
-    borderWidth: 1,
-    borderColor: "#D5ECE9",
-  },
-
-  inputFooter: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginTop: 8,
-  },
-
-  privacyText: {
-    fontSize: 10,
-    color: C.muted,
-    flex: 1,
-  },
-
-  characterCount: {
-    fontSize: 10,
-    color: C.muted,
-  },
-
-  selectedPrompt: {
-    marginTop: 10,
-    borderRadius: 14,
-    backgroundColor: C.white,
-    padding: 10,
-    flexDirection: "row",
-    alignItems: "center",
-  },
-
-  selectedPromptIcon: {
-    fontSize: 16,
-    color: C.coral,
-    marginRight: 7,
-  },
-
-  selectedPromptText: {
-    flex: 1,
-    fontSize: 11,
-    color: C.deepTeal,
-    fontWeight: "600",
-  },
-
-  /* SHARE BUTTON */
-
-  postButton: {
-    backgroundColor: C.deepTeal,
-    borderRadius: 28,
-    minHeight: 52,
-    paddingLeft: 18,
-    paddingRight: 7,
-    alignItems: "center",
-    justifyContent: "space-between",
-    flexDirection: "row",
-    marginTop: 14,
-
-    shadowColor: C.deepTeal,
-    shadowOpacity: 0.15,
-    shadowRadius: 10,
-    shadowOffset: {
-      width: 0,
-      height: 5,
-    },
-
-    elevation: 3,
-  },
-
-  disabled: {
-    opacity: 0.35,
-  },
-
-  buttonPressed: {
-    transform: [{ scale: 0.97 }],
-  },
-
-  postButtonText: {
-    color: C.white,
-    fontWeight: "700",
-    fontSize: 13,
-    marginLeft: 4,
-  },
-
-  postArrow: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: C.yellow,
-    color: C.deepTeal,
-    fontSize: 19,
-    fontWeight: "900",
-    textAlign: "center",
-    textAlignVertical: "center",
-  },
-
-  /* -------------------------------------------------------
-     SHARED MESSAGE
-  ------------------------------------------------------- */
-
-  sharedMessage: {
-    backgroundColor: C.white,
-    borderRadius: 17,
-    padding: 11,
-    marginTop: 11,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-
-    borderWidth: 1,
-    borderColor: "#D5ECE9",
-  },
-
-  sharedIcon: {
-    width: 25,
-    height: 25,
-    borderRadius: 13,
-    backgroundColor: C.teal,
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: 8,
-  },
-
-  sharedIconText: {
-    color: C.white,
-    fontSize: 14,
-    fontWeight: "800",
-  },
-
-  sharedText: {
-    color: C.deepTeal,
-    fontSize: 12,
-    fontWeight: "700",
-  },
-
-  /* -------------------------------------------------------
-     SECTION
-  ------------------------------------------------------- */
-
-  sectionHeader: {
-    marginTop: 30,
-    marginBottom: 15,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-
-  sectionTitle: {
-    fontSize: 23,
-    fontWeight: "700",
-    color: C.dark,
-  },
-
-  sectionSubtitle: {
-    fontSize: 11,
-    color: C.muted,
-    marginTop: 3,
-  },
-
-  postCountBadge: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: C.yellow,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  postCountText: {
-    color: C.dark,
-    fontSize: 13,
-    fontWeight: "800",
-  },
-
-  /* -------------------------------------------------------
-     POST CARD
-  ------------------------------------------------------- */
-
-  postCard: {
-    backgroundColor: C.white,
-    borderRadius: 22,
-    padding: 18,
-    marginBottom: 13,
-    flexDirection: "row",
-
-    borderWidth: 1,
-    borderColor: "#E2EFED",
-
-    shadowColor: C.dark,
-    shadowOpacity: 0.04,
-    shadowRadius: 9,
-    shadowOffset: {
-      width: 0,
-      height: 4,
-    },
-
-    elevation: 2,
-  },
-
-  avatar: {
+  createSymbol: {
     width: 42,
     height: 42,
     borderRadius: 21,
@@ -1953,15 +1744,249 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
 
-  avatarText: {
-    fontSize: 16,
-    fontWeight: "700",
+  createSymbolText: {
+    color: C.teal,
+    fontSize: 25,
+  },
+
+  promptScroll: {
+    paddingBottom: 13,
+    gap: 8,
+  },
+
+  promptChip: {
+    borderWidth: 1,
+    borderColor: "#DDEBEA",
+    backgroundColor: C.cream,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 17,
+    marginRight: 7,
+  },
+
+  promptChipSelected: {
+    backgroundColor: C.paleTeal,
+    borderColor: C.teal,
+  },
+
+  promptText: {
+    color: C.muted,
+    fontSize: 11,
+    fontWeight: "600",
+  },
+
+  promptTextSelected: {
     color: C.deepTeal,
   },
 
-  postContent: {
+  inputWrapper: {
+    minHeight: 125,
+    borderRadius: 17,
+    backgroundColor: "#FAFCFA",
+    borderWidth: 1,
+    borderColor: "#E8EEEE",
+    marginBottom: 12,
+  },
+
+  postInput: {
+    minHeight: 105,
+    paddingHorizontal: 14,
+    paddingTop: 13,
+    paddingBottom: 25,
+    color: C.dark,
+    fontSize: 14,
+    lineHeight: 21,
+  },
+
+  characterCount: {
+    position: "absolute",
+    right: 11,
+    bottom: 8,
+    color: C.muted,
+    fontSize: 10,
+  },
+
+  shareButton: {
+    minHeight: 49,
+    borderRadius: 17,
+    backgroundColor: C.yellow,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  shareButtonText: {
+    color: C.dark,
+    fontSize: 13,
+    fontWeight: "800",
+  },
+
+  shareArrow: {
+    color: C.dark,
+    fontSize: 19,
+    marginLeft: 9,
+    marginTop: -2,
+  },
+
+  buttonPressed: {
+    opacity: 0.88,
+  },
+
+  buttonDisabled: {
+    opacity: 0.55,
+  },
+
+  sharedMessage: {
+    marginTop: 10,
+    padding: 10,
+    borderRadius: 12,
+    backgroundColor: C.paleTeal,
+  },
+
+  sharedMessageText: {
+    textAlign: "center",
+    color: C.deepTeal,
+    fontSize: 11,
+    fontWeight: "600",
+  },
+
+  /* ---------------------------------------------------
+     FEED
+  --------------------------------------------------- */
+
+  feedHeader: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    justifyContent: "space-between",
+    marginBottom: 14,
+  },
+
+  sectionEyebrow: {
+    color: C.teal,
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 1.8,
+    marginBottom: 4,
+  },
+
+  feedTitle: {
+    color: C.dark,
+    fontSize: 14,
+    fontWeight: "600",
+  },
+
+  countBadge: {
+    minWidth: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: C.white,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  countBadgeText: {
+    color: C.deepTeal,
+    fontSize: 11,
+    fontWeight: "800",
+  },
+
+  loadingBox: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 38,
+  },
+
+  loadingText: {
+    color: C.muted,
+    fontSize: 12,
+    marginTop: 10,
+  },
+
+  /* ---------------------------------------------------
+     EMPTY
+  --------------------------------------------------- */
+
+  emptyCard: {
+    backgroundColor: C.white,
+    borderRadius: 25,
+    padding: 27,
+    alignItems: "center",
+    marginBottom: 20,
+  },
+
+  emptyIllustration: {
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    backgroundColor: C.paleTeal,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 13,
+  },
+
+  emptyHeart: {
+    color: C.teal,
+    fontSize: 35,
+  },
+
+  emptyTitle: {
+    color: C.dark,
+    fontSize: 17,
+    fontWeight: "800",
+    marginBottom: 7,
+  },
+
+  emptyText: {
+    color: C.muted,
+    fontSize: 13,
+    lineHeight: 20,
+    textAlign: "center",
+    maxWidth: 290,
+  },
+
+  /* ---------------------------------------------------
+     POST CARD
+  --------------------------------------------------- */
+
+  postCard: {
+    backgroundColor: C.white,
+    borderRadius: 24,
+    padding: 17,
+    marginBottom: 13,
+    shadowColor: "#164F52",
+    shadowOpacity: 0.035,
+    shadowRadius: 10,
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    elevation: 2,
+  },
+
+  postHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 13,
+  },
+
+  avatar: {
+    width: 43,
+    height: 43,
+    borderRadius: 22,
+    backgroundColor: C.paleTeal,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 11,
+  },
+
+  avatarText: {
+    color: C.deepTeal,
+    fontSize: 16,
+    fontWeight: "800",
+  },
+
+  postIdentity: {
     flex: 1,
-    marginLeft: 13,
   },
 
   nameRow: {
@@ -1969,280 +1994,371 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
 
-  name: {
-    fontSize: 15,
-    fontWeight: "700",
+  postName: {
     color: C.dark,
+    fontSize: 14,
+    fontWeight: "800",
   },
 
-  youBadge: {
+  mamaBadge: {
     marginLeft: 7,
-    backgroundColor: C.yellow,
-    borderRadius: 8,
+    backgroundColor: C.cream,
     paddingHorizontal: 6,
     paddingVertical: 3,
+    borderRadius: 7,
   },
 
-  youBadgeText: {
+  mamaBadgeText: {
+    color: C.muted,
     fontSize: 7,
-    color: C.dark,
-    fontWeight: "900",
+    fontWeight: "800",
     letterSpacing: 0.7,
   },
 
-  postText: {
-    fontSize: 14,
-    lineHeight: 21,
+  postTime: {
     color: C.muted,
-    marginTop: 7,
-  },
-
-  /* -------------------------------------------------------
-     REACTIONS
-  ------------------------------------------------------- */
-
-  reactionRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginTop: 13,
-  },
-
-  reactionButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginRight: 18,
-  },
-
-  reaction: {
-    fontSize: 12,
-    color: "#7B9090",
-    fontWeight: "600",
-  },
-
-  reactionActive: {
-    color: C.coral,
-  },
-
-  reactionCount: {
-    marginLeft: 5,
-    minWidth: 20,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: C.paleTeal,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 4,
-  },
-
-  reactionCountText: {
-    fontSize: 9,
-    color: C.deepTeal,
-    fontWeight: "800",
-  },
-
-  /* -------------------------------------------------------
-     BOTTOM
-  ------------------------------------------------------- */
-
-  bottomMessage: {
-    backgroundColor: C.paleTeal,
-    borderRadius: 24,
-    padding: 25,
-    alignItems: "center",
-    marginTop: 20,
-    marginBottom: 10,
-
-    borderWidth: 1,
-    borderColor: "#D1ECE9",
-  },
-
-  bottomHeartCircle: {
-    width: 62,
-    height: 62,
-    borderRadius: 31,
-    backgroundColor: C.white,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  bottomHeart: {
-    fontSize: 38,
-    color: C.coral,
-  },
-
-  bottomTitle: {
-    fontSize: 19,
-    fontWeight: "700",
-    color: C.dark,
-    textAlign: "center",
-    marginTop: 10,
-  },
-
-  bottomText: {
-    fontSize: 13,
-    color: C.muted,
-    marginTop: 6,
-  },
-
-  bottomBadge: {
-    marginTop: 13,
-    backgroundColor: C.yellow,
-    borderRadius: 13,
-    paddingHorizontal: 11,
-    paddingVertical: 7,
-  },
-
-  bottomBadgeText: {
     fontSize: 10,
+    marginTop: 3,
+  },
+
+  postText: {
     color: C.dark,
-    fontWeight: "800",
-  },
-
-  /* -------------------------------------------------------
-     MODAL
-  ------------------------------------------------------- */
-
-  modalOverlay: {
-    flex: 1,
-    backgroundColor:
-      "rgba(14, 124, 134, 0.28)",
-    justifyContent: "center",
-    padding: 22,
-  },
-
-  modalCard: {
-    backgroundColor: C.white,
-    borderRadius: 27,
-    padding: 23,
-
-    shadowColor: C.dark,
-    shadowOpacity: 0.15,
-    shadowRadius: 22,
-    shadowOffset: {
-      width: 0,
-      height: 10,
-    },
-
-    elevation: 8,
-  },
-
-  modalHandle: {
-    width: 38,
-    height: 5,
-    borderRadius: 5,
-    backgroundColor: C.paleTeal,
-    alignSelf: "center",
-    marginBottom: 17,
-  },
-
-  modalTitle: {
-    fontSize: 24,
-    fontWeight: "700",
-    color: C.dark,
-  },
-
-  modalSubtitle: {
-    fontSize: 13,
-    lineHeight: 19,
-    color: C.muted,
-    marginTop: 6,
+    fontSize: 14,
+    lineHeight: 22,
     marginBottom: 15,
   },
 
-  replyPreview: {
+  postActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderTopWidth: 1,
+    borderTopColor: "#F0F3F2",
+    paddingTop: 12,
+  },
+
+  supportButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 6,
+    paddingRight: 18,
+  },
+
+  supportButtonActive: {
     backgroundColor: C.paleTeal,
-    borderRadius: 16,
-    padding: 12,
-    marginBottom: 12,
+    paddingHorizontal: 9,
+    borderRadius: 12,
   },
 
-  replyPreviewName: {
-    fontSize: 12,
-    color: C.deepTeal,
-    fontWeight: "800",
-  },
-
-  replyPreviewText: {
-    fontSize: 12,
+  supportIcon: {
     color: C.muted,
-    lineHeight: 18,
-    marginTop: 4,
+    fontSize: 19,
+    marginRight: 5,
   },
 
-  replyInput: {
-    backgroundColor: C.cream,
-    borderWidth: 1,
-    borderColor: "#D5ECE9",
-    borderRadius: 16,
-    minHeight: 105,
-    padding: 14,
-    fontSize: 15,
-    color: C.dark,
-    textAlignVertical: "top",
+  supportIconActive: {
+    color: C.coral,
   },
 
-  replyCharacterRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginTop: 7,
-  },
-
-  replyHint: {
-    flex: 1,
-    fontSize: 10,
+  supportText: {
     color: C.muted,
-  },
-
-  modalButtons: {
-    flexDirection: "row",
-    justifyContent: "flex-end",
-    alignItems: "center",
-    marginTop: 18,
-  },
-
-  cancelButton: {
-    paddingVertical: 13,
-    paddingHorizontal: 17,
-    marginRight: 7,
-  },
-
-  cancelText: {
-    color: C.muted,
+    fontSize: 11,
     fontWeight: "700",
+  },
+
+  supportTextActive: {
+    color: C.deepTeal,
   },
 
   replyButton: {
-    backgroundColor: C.deepTeal,
-    borderRadius: 24,
-    minHeight: 46,
-    paddingLeft: 17,
-    paddingRight: 6,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
+    paddingVertical: 6,
+    paddingHorizontal: 9,
   },
 
-  replyDisabled: {
-    opacity: 0.35,
+  replyIcon: {
+    color: C.muted,
+    fontSize: 18,
+    marginRight: 5,
   },
 
-  replyButtonText: {
-    color: C.white,
-    fontSize: 12,
+  replyText: {
+    color: C.muted,
+    fontSize: 11,
     fontWeight: "700",
   },
 
-  replyButtonArrow: {
-    width: 35,
-    height: 35,
-    borderRadius: 18,
+  actionCount: {
+    color: C.muted,
+    fontSize: 10,
+    fontWeight: "700",
+    marginLeft: 5,
+  },
+
+  actionPressed: {
+    opacity: 0.6,
+  },
+
+  supportSummary: {
+    marginTop: 10,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+
+  supportMiniDots: {
+    flexDirection: "row",
+    marginRight: 7,
+  },
+
+  miniDotOne: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
     backgroundColor: C.yellow,
+    borderWidth: 1,
+    borderColor: C.white,
+  },
+
+  miniDotTwo: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: C.teal,
+    borderWidth: 1,
+    borderColor: C.white,
+    marginLeft: -4,
+  },
+
+  miniDotThree: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: C.coral,
+    borderWidth: 1,
+    borderColor: C.white,
+    marginLeft: -4,
+  },
+
+  supportSummaryText: {
+    color: C.muted,
+    fontSize: 10,
+    fontWeight: "600",
+  },
+
+  /* ---------------------------------------------------
+     FOOTER
+  --------------------------------------------------- */
+
+  footer: {
+    alignItems: "center",
+    paddingTop: 25,
+    paddingBottom: 15,
+  },
+
+  footerLine: {
+    width: 45,
+    height: 2,
+    borderRadius: 1,
+    backgroundColor: C.yellow,
+    marginBottom: 20,
+  },
+
+  footerTitle: {
+    color: C.dark,
+    fontSize: 14,
+    fontWeight: "800",
+    marginBottom: 5,
+  },
+
+  footerText: {
+    color: C.muted,
+    fontSize: 11,
+  },
+
+  footerSymbol: {
+    color: C.teal,
+    fontSize: 23,
+    marginTop: 13,
+  },
+
+  footerBrand: {
     color: C.deepTeal,
-    fontSize: 17,
-    fontWeight: "900",
-    textAlign: "center",
-    textAlignVertical: "center",
-    marginLeft: 10,
+    fontSize: 9,
+    fontWeight: "800",
+    letterSpacing: 1.3,
+    marginTop: 3,
+  },
+
+  /* ---------------------------------------------------
+     MODAL
+  --------------------------------------------------- */
+
+  modalOverlay: {
+    flex: 1,
+    justifyContent: "flex-end",
+  },
+
+  modalBackdrop: {
+  position: "absolute",
+  top: 0,
+  left: 0,
+  right: 0,
+  bottom: 0,
+  backgroundColor: "rgba(22,79,82,0.25)",
+},
+  replyModal: {
+    backgroundColor: C.white,
+    borderTopLeftRadius: 30,
+    borderTopRightRadius: 30,
+    paddingHorizontal: 20,
+    paddingTop: 11,
+    paddingBottom: Platform.OS === "ios" ? 28 : 20,
+    minHeight: 430,
+  },
+
+  modalHandle: {
+    width: 42,
+    height: 4,
+    borderRadius: 3,
+    backgroundColor: "#D8E4E3",
+    alignSelf: "center",
+    marginBottom: 20,
+  },
+
+  modalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    marginBottom: 17,
+  },
+
+  modalEyebrow: {
+    color: C.teal,
+    fontSize: 9,
+    fontWeight: "800",
+    letterSpacing: 1.7,
+    marginBottom: 5,
+  },
+
+  modalTitle: {
+    color: C.dark,
+    fontSize: 20,
+    fontWeight: "800",
+    lineHeight: 27,
+    maxWidth: 300,
+  },
+
+  closeButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: C.cream,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  closeButtonText: {
+    color: C.dark,
+    fontSize: 22,
+    marginTop: -2,
+  },
+
+  replyPreview: {
+    flexDirection: "row",
+    backgroundColor: C.paleTeal,
+    borderRadius: 16,
+    padding: 12,
+    marginBottom: 13,
+  },
+
+  replyPreviewAvatar: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: C.white,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 9,
+  },
+
+  replyPreviewAvatarText: {
+    color: C.deepTeal,
+    fontSize: 12,
+    fontWeight: "800",
+  },
+
+  replyPreviewContent: {
+    flex: 1,
+  },
+
+  replyPreviewName: {
+    color: C.deepTeal,
+    fontSize: 11,
+    fontWeight: "800",
+    marginBottom: 3,
+  },
+
+  replyPreviewText: {
+    color: C.dark,
+    fontSize: 11,
+    lineHeight: 17,
+  },
+
+  replyInputWrapper: {
+    minHeight: 105,
+    backgroundColor: "#FAFCFA",
+    borderRadius: 17,
+    borderWidth: 1,
+    borderColor: "#E7EEEE",
+  },
+
+  replyInput: {
+    minHeight: 85,
+    paddingHorizontal: 13,
+    paddingTop: 12,
+    paddingBottom: 22,
+    color: C.dark,
+    fontSize: 13,
+    lineHeight: 20,
+  },
+
+  replyCharacterCount: {
+    position: "absolute",
+    right: 10,
+    bottom: 7,
+    color: C.muted,
+    fontSize: 9,
+  },
+
+  kindnessHint: {
+    color: C.muted,
+    fontSize: 10,
+    marginTop: 9,
+    marginBottom: 12,
+  },
+
+  sendReplyButton: {
+    minHeight: 48,
+    borderRadius: 16,
+    backgroundColor: C.deepTeal,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  sendReplyText: {
+    color: C.white,
+    fontSize: 13,
+    fontWeight: "800",
+  },
+
+  sendReplyArrow: {
+    color: C.white,
+    fontSize: 18,
+    marginLeft: 8,
+  },
+
+  pressedSmall: {
+    opacity: 0.7,
   },
 });
